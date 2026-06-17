@@ -9,3 +9,4 @@ build
 *.tsbuildinfo
 coverage
 apps/extension/dist
+.playwright-mcp
