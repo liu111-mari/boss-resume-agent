@@ -1,0 +1,108 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - complementary [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]: B
+        - generic [ref=e6]: BOSS 求职助手
+      - navigation [ref=e7]:
+        - generic [ref=e8]:
+          - img [ref=e9]
+          - generic [ref=e12]: 工作台
+        - generic [ref=e13]:
+          - img [ref=e14]
+          - generic [ref=e18]: 岗位池
+        - generic [ref=e19]:
+          - img [ref=e20]
+          - generic [ref=e23]: 打招呼队列
+        - generic [ref=e24]:
+          - img [ref=e25]
+          - generic [ref=e27]: 消息线索
+        - generic [ref=e28]:
+          - img [ref=e29]
+          - generic [ref=e32]: 简历生成
+        - generic [ref=e33]:
+          - img [ref=e34]
+          - generic [ref=e37]: 设置
+    - main [ref=e38]:
+      - generic [ref=e39]:
+        - generic [ref=e40]:
+          - heading "审批后自动发送工作台" [level=1] [ref=e41]
+          - generic [ref=e42]: 采集岗位、筛选任务、审批发送、识别要简历线索
+        - generic [ref=e43]: Chrome 插件本地连接
+      - generic [ref=e45]:
+        - generic [ref=e46]:
+          - generic [ref=e47]:
+            - img [ref=e48]
+            - text: 等待 Chrome 插件采集岗位。也可以先加载示例数据跑通流程。
+          - generic [ref=e50]:
+            - generic [ref=e51]:
+              - heading "岗位池" [level=2] [ref=e52]
+              - generic [ref=e53]:
+                - button "刷新" [ref=e54] [cursor=pointer]:
+                  - img [ref=e55]
+                  - text: 刷新
+                - button "示例数据" [ref=e60] [cursor=pointer]:
+                  - img [ref=e61]
+                  - text: 示例数据
+                - button "生成打招呼草稿" [disabled] [ref=e64] [cursor=pointer]:
+                  - img [ref=e65]
+                  - text: 生成打招呼草稿
+            - generic [ref=e68]:
+              - generic [ref=e69]:
+                - generic [ref=e70]:
+                  - generic [ref=e71]: 城市
+                  - textbox "北京/上海" [ref=e72]
+                - generic [ref=e73]:
+                  - generic [ref=e74]: 岗位方向
+                  - combobox [ref=e75]:
+                    - option "全部" [selected]
+                    - option "数据分析"
+                    - option "AI产品"
+                    - option "产品运营"
+                    - option "实施顾问"
+                    - option "AI Agent"
+                - generic [ref=e76]:
+                  - generic [ref=e77]: 关键词
+                  - textbox "SQL / RAG / 实习" [ref=e78]
+                - generic [ref=e79]:
+                  - generic [ref=e80]: 黑名单
+                  - textbox "培训,销售" [ref=e81]
+              - table [ref=e83]:
+                - rowgroup [ref=e84]:
+                  - row "选择 岗位 公司/城市 方向 操作" [ref=e85]:
+                    - columnheader "选择" [ref=e86]
+                    - columnheader "岗位" [ref=e87]
+                    - columnheader "公司/城市" [ref=e88]
+                    - columnheader "方向" [ref=e89]
+                    - columnheader "操作" [ref=e90]
+                - rowgroup [ref=e91]:
+                  - row "暂无岗位。请用插件采集，或加载示例数据。" [ref=e92]:
+                    - cell "暂无岗位。请用插件采集，或加载示例数据。" [ref=e93]
+          - generic [ref=e94]:
+            - generic [ref=e95]:
+              - heading "JD 粘贴解析" [level=2] [ref=e96]
+              - button "生成简历" [ref=e97] [cursor=pointer]:
+                - img [ref=e98]
+                - text: 生成简历
+            - textbox "粘贴 BOSS 岗位详情文本，或使用插件自动采集。" [ref=e102]
+        - generic [ref=e103]:
+          - generic [ref=e104]:
+            - generic [ref=e105]:
+              - heading "打招呼队列" [level=2] [ref=e106]
+              - button "审批选中" [disabled] [ref=e107] [cursor=pointer]:
+                - img [ref=e108]
+                - text: 审批选中
+            - generic [ref=e112]: 选择岗位后生成打招呼草稿。
+          - generic [ref=e113]:
+            - generic [ref=e114]:
+              - heading "消息线索" [level=2] [ref=e115]
+              - generic [ref=e116]: 0 个要简历
+            - generic [ref=e118]: 在 BOSS 消息页用插件采集会话线索。
+          - generic [ref=e119]:
+            - generic [ref=e120]:
+              - heading "岗位版简历" [level=2] [ref=e121]
+              - generic [ref=e122]:
+                - button "复制 Markdown" [disabled] [ref=e123] [cursor=pointer]
+                - button "下载 DOCX" [disabled] [ref=e124] [cursor=pointer]
+            - generic [ref=e126]: 从岗位池选择岗位，或粘贴 JD 后生成。
+  - alert [ref=e127]

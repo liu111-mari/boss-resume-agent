@@ -1,0 +1,55 @@
+body {
+  margin: 0;
+  width: 280px;
+  color: #17201d;
+  font-family: "Microsoft YaHei", system-ui, sans-serif;
+}
+
+main {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+}
+
+h1 {
+  margin: 0;
+  font-size: 17px;
+}
+
+p {
+  margin: 0;
+  color: #6b7671;
+  font-size: 12px;
+}
+
+button,
+a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 34px;
+  border: 1px solid #dfe7e3;
+  border-radius: 8px;
+  background: #fff;
+  color: #17201d;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+}
+
+button:first-of-type {
+  background: #0f8f78;
+  color: #fff;
+}
+
+.note {
+  border: 1px solid #f0d7a7;
+  border-radius: 8px;
+  background: #fffaf0;
+  color: #60430f;
+  padding: 8px;
+  font-size: 12px;
+  line-height: 1.5;
+}

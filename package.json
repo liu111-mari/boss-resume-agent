@@ -1,0 +1,17 @@
+{
+  "name": "boss-resume-agent",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/web",
+    "apps/extension",
+    "packages/shared"
+  ],
+  "scripts": {
+    "dev": "npm run dev -w @boss-agent/web",
+    "build": "npm run build --workspaces",
+    "lint": "npm run lint -w @boss-agent/web",
+    "typecheck": "npm run typecheck --workspaces",
+    "extension:build": "npm run build -w @boss-agent/extension"
+  }
+}
