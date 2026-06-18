@@ -20,6 +20,42 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
+scheduleAutomaticJobCollection();
+
+function scheduleAutomaticJobCollection() {
+  const supportedPath =
+    location.pathname.includes("/web/geek/jobs") ||
+    /^\/c\d+/.test(location.pathname) ||
+    location.pathname.includes("/zhaopin");
+  if (!supportedPath) return;
+
+  let collectedSignature = "";
+  let timer;
+
+  const attemptCollection = async () => {
+    const links = Array.from(document.querySelectorAll("a[href*='/job_detail/']"));
+    const signature = links
+      .slice(0, 50)
+      .map((link) => link.getAttribute("href"))
+      .filter(Boolean)
+      .join("|");
+    if (!signature || signature === collectedSignature) return;
+
+    const result = await collectVisibleJobs().catch(() => null);
+    if (result?.ok) collectedSignature = signature;
+  };
+
+  const schedule = () => {
+    clearTimeout(timer);
+    timer = setTimeout(attemptCollection, 900);
+  };
+
+  schedule();
+  const observer = new MutationObserver(schedule);
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+  setTimeout(() => observer.disconnect(), 30000);
+}
+
 async function collectVisibleJobs() {
   if (hasRiskBlocker()) return { ok: false, message: "检测到验证码/登录/安全提示，已暂停" };
   const jobs = globalThis.BossJobExtractor.extractVisibleJobs(document, location.href);

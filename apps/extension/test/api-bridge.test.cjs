@@ -19,3 +19,11 @@ test("job extractor loads before the content script", () => {
 
   assert.deepEqual(scripts.slice(0, 2), ["job-extractor.cjs", "content.js"]);
 });
+
+test("content script automatically collects jobs on supported BOSS job pages", () => {
+  const content = fs.readFileSync(path.join(__dirname, "../src/content.js"), "utf8");
+
+  assert.match(content, /scheduleAutomaticJobCollection/);
+  assert.match(content, /MutationObserver/);
+  assert.match(content, /web\/geek\/jobs/);
+});
