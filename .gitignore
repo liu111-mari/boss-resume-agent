@@ -10,3 +10,4 @@ build
 coverage
 apps/extension/dist
 .playwright-mcp
+.worktrees/
