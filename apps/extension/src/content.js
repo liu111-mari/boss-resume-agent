@@ -1,16 +1,20 @@
-const API_BASE = "http://localhost:3000";
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "COLLECT_VISIBLE_JOBS") {
-    collectVisibleJobs().then(sendResponse);
+    collectVisibleJobs().then(sendResponse).catch((error) => {
+      sendResponse({ ok: false, message: error instanceof Error ? error.message : "岗位采集失败" });
+    });
     return true;
   }
   if (message.type === "COLLECT_CONVERSATIONS") {
-    collectConversations().then(sendResponse);
+    collectConversations().then(sendResponse).catch((error) => {
+      sendResponse({ ok: false, message: error instanceof Error ? error.message : "消息采集失败" });
+    });
     return true;
   }
   if (message.type === "SEND_GREETING") {
-    sendGreeting(message.task).then(sendResponse);
+    sendGreeting(message.task).then(sendResponse).catch((error) => {
+      sendResponse({ ok: false, error: error instanceof Error ? error.message : "发送失败", pause: true });
+    });
     return true;
   }
   return false;
@@ -18,8 +22,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 async function collectVisibleJobs() {
   if (hasRiskBlocker()) return { ok: false, message: "检测到验证码/登录/安全提示，已暂停" };
-  const cards = findJobCards();
-  const jobs = cards.map((card, index) => extractJob(card, index)).filter(Boolean);
+  const jobs = globalThis.BossJobExtractor.extractVisibleJobs(document, location.href);
+  if (!jobs.length) {
+    return { ok: false, message: "当前页面未识别到岗位，请确认已打开 BOSS 推荐或搜索结果页" };
+  }
   await postJSON("/api/extension/ingest", { jobs });
   return { ok: true, message: `已采集 ${jobs.length} 个岗位` };
 }
@@ -62,41 +68,6 @@ async function sendGreeting(task) {
   if (!sendButton) return { ok: false, error: "没有找到发送按钮", pause: true };
   sendButton.click();
   return { ok: true };
-}
-
-function findJobCards() {
-  const selectors = [".job-card-wrapper", ".job-list-box li", ".job-primary", ".job-card-body", "[class*='job-card']", "li"];
-  for (const selector of selectors) {
-    const nodes = Array.from(document.querySelectorAll(selector)).filter((node) => {
-      const text = normalize(node.textContent || "");
-      return text.length > 20 && /实习|产品|数据|运营|实施|AI|Agent|SQL|北京|上海/.test(text);
-    });
-    if (nodes.length) return nodes.slice(0, 30);
-  }
-  return [];
-}
-
-function extractJob(card, index) {
-  const text = normalize(card.textContent || "");
-  const link = card.querySelector("a[href*='job_detail']") || card.closest("a[href*='job_detail']");
-  const href = link ? new URL(link.getAttribute("href"), location.origin).href : location.href;
-  const title = pickJobTitle(text) || pickByLine(text, 0) || "未知岗位";
-  const company = pickCompany(text) || "未知公司";
-  const city = pickCity(text) || "";
-  const salary = (text.match(/\d+[Kk]-\d+[Kk]|\d+-\d+\/天|\d+元\/天/) || [""])[0];
-  return {
-    id: stableId(`${href}-${title}-${company}`),
-    title,
-    company,
-    city,
-    salary,
-    hrName: pickHr(text),
-    hrActiveText: pickActive(text),
-    detailUrl: href,
-    sourcePage: location.href,
-    jdText: text.slice(0, 3000),
-    collectedAt: new Date().toISOString()
-  };
 }
 
 function hasRiskBlocker() {
@@ -174,13 +145,13 @@ function stableId(input) {
 }
 
 async function postJSON(path, body) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
+  const response = await chrome.runtime.sendMessage({
+    type: "LOCAL_API_REQUEST",
+    path,
+    body
   });
-  if (!response.ok) throw new Error(`本地工作台接口失败：${response.status}`);
-  return response.json();
+  if (!response?.ok) throw new Error(response?.error || "无法连接本地工作台");
+  return response.data;
 }
 
 function delay(ms) {

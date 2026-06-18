@@ -2,10 +2,36 @@ const API_BASE = "http://localhost:3000";
 let running = false;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type !== "RUN_APPROVED_TASKS") return false;
-  runApprovedTasks().then(sendResponse);
-  return true;
+  if (message.type === "RUN_APPROVED_TASKS") {
+    runApprovedTasks().then(sendResponse);
+    return true;
+  }
+  if (message.type === "LOCAL_API_REQUEST") {
+    requestLocalApi(message.path, message.body).then(sendResponse);
+    return true;
+  }
+  return false;
 });
+
+async function requestLocalApi(path, body) {
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      return { ok: false, error: data.error || `本地工作台接口失败：${response.status}` };
+    }
+    return { ok: true, data };
+  } catch (error) {
+    return {
+      ok: false,
+      error: error instanceof Error ? error.message : "无法连接本地工作台"
+    };
+  }
+}
 
 async function runApprovedTasks() {
   if (running) return { ok: false, message: "任务正在执行中" };

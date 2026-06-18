@@ -5,10 +5,12 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build-extension.mjs",
+    "test": "node --test test/*.test.cjs",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "@types/chrome": "^0.1.35",
+    "jsdom": "^26.1.0",
     "typescript": "^5.9.3"
   }
 }
