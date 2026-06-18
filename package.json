@@ -11,7 +11,12 @@
     "dev": "npm run dev -w @boss-agent/web",
     "build": "npm run build --workspaces",
     "lint": "npm run lint -w @boss-agent/web",
+    "test:web": "vitest run apps/web/test",
+    "test": "npm run test:web && npm test -w @boss-agent/extension",
     "typecheck": "npm run typecheck --workspaces",
     "extension:build": "npm run build -w @boss-agent/extension"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
   }
 }

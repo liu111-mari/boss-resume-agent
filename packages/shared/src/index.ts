@@ -20,9 +20,71 @@ export const jobCardSchema = z.object({
   detailUrl: z.string().optional().default(""),
   sourcePage: z.string().optional().default("boss"),
   jdText: z.string().optional().default(""),
+  experience: z.string().default(""),
+  education: z.string().default(""),
+  industry: z.string().default(""),
+  rawText: z.string().default(""),
   direction: jobDirectionSchema.optional().default("其他"),
   collectedAt: z.string()
 });
+
+export const filterConfigSchema = z.object({
+  targetTitles: z.array(z.string()).default([]),
+  cities: z.array(z.string()).default([]),
+  minSalary: z.number().nonnegative().nullable().default(null),
+  maxSalary: z.number().nonnegative().nullable().default(null),
+  employmentTypes: z.array(z.enum(["internship", "campus", "social"])),
+  requiredKeywords: z.array(z.string()).default([]),
+  excludedKeywords: z.array(z.string()).default([]),
+  blockedCompanies: z.array(z.string()).default([]),
+  blockedIndustries: z.array(z.string()).default([]),
+  allowedExperience: z.array(z.string()).default([]),
+  allowedEducation: z.array(z.string()).default([]),
+  scoreThreshold: z.number().min(0).max(100).default(70),
+  dailyLimit: z.number().int().min(1).max(150).default(100)
+});
+
+export const profileItemSchema = z.object({
+  id: z.string(),
+  category: z.enum(["skill", "project", "intro", "other"]),
+  content: z.string().min(1),
+  tags: z.array(z.string()).default([]),
+  enabled: z.boolean().default(true)
+});
+
+export const profileSchema = z.object({
+  school: z.string().default(""),
+  major: z.string().default(""),
+  graduation: z.string().default(""),
+  direction: z.string().default(""),
+  items: z.array(profileItemSchema).default([])
+});
+
+export const greetingTemplateSchema = z.object({
+  body: z.string().min(1),
+  tone: z.string().default("自然"),
+  minLength: z.number().int().min(1).default(30),
+  maxLength: z.number().int().min(20).max(500).default(120),
+  maxSkills: z.number().int().min(0).max(10).default(2),
+  maxProjects: z.number().int().min(0).max(5).default(1),
+  bannedPhrases: z.array(z.string()).default([]),
+  version: z.number().int().positive().default(1)
+});
+
+export const greetingTaskStatusSchema = z.enum([
+  "collected",
+  "filtered",
+  "scored",
+  "generated",
+  "pending_review",
+  "approved",
+  "sending",
+  "sent",
+  "rejected",
+  "failed",
+  "paused",
+  "quota_blocked"
+]);
 
 export const parsedJDSchema = z.object({
   responsibilities: z.array(z.string()).default([]),
@@ -54,9 +116,19 @@ export const greetingTaskSchema = z.object({
   company: z.string(),
   detailUrl: z.string().optional().default(""),
   messageDraft: z.string(),
-  status: z.enum(["draft", "approved", "sent", "failed", "skipped"]).default("draft"),
+  status: greetingTaskStatusSchema.default("collected"),
+  score: z.number().min(0).max(100).optional(),
+  matchReasons: z.array(z.string()).default([]),
+  matchedRequirements: z.array(z.string()).default([]),
+  missingRequirements: z.array(z.string()).default([]),
+  usedProfileItemIds: z.array(z.string()).default([]),
+  modelProvider: z.string().default("local"),
+  modelName: z.string().default("template"),
+  templateVersion: z.number().int().positive().default(1),
+  estimatedCostCny: z.number().nonnegative().default(0),
   failureReason: z.string().optional().default(""),
-  createdAt: z.string()
+  createdAt: z.string(),
+  updatedAt: z.string()
 });
 
 export const profileAssetSchema = z.object({
@@ -79,9 +151,17 @@ export const resumeVersionSchema = z.object({
 
 export type JobDirection = z.infer<typeof jobDirectionSchema>;
 export type JobCard = z.infer<typeof jobCardSchema>;
+export type FilterConfig = z.infer<typeof filterConfigSchema>;
+export type ProfileItem = z.infer<typeof profileItemSchema>;
+export type Profile = z.infer<typeof profileSchema>;
+export type GreetingTemplate = z.infer<typeof greetingTemplateSchema>;
+export type GreetingTaskStatus = z.infer<typeof greetingTaskStatusSchema>;
 export type ParsedJD = z.infer<typeof parsedJDSchema>;
 export type ConversationLead = z.infer<typeof conversationLeadSchema>;
-export type GreetingTask = z.infer<typeof greetingTaskSchema>;
+type ParsedGreetingTask = z.infer<typeof greetingTaskSchema>;
+export type GreetingTask = Omit<ParsedGreetingTask, "status"> & {
+  status: GreetingTaskStatus | "draft";
+};
 export type ProfileAsset = z.infer<typeof profileAssetSchema>;
 export type ResumeVersion = z.infer<typeof resumeVersionSchema>;
 
