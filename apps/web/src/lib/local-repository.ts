@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -12,6 +13,16 @@ type FileOps = {
   rm: typeof rm;
   stat: typeof stat;
   writeFile: typeof writeFile;
+};
+
+type ResidualBackup = {
+  path: string;
+  name: string;
+  mtimeMs: number;
+  parsedName: {
+    epochMs: number;
+    hrtimeNs: bigint;
+  } | null;
 };
 
 const defaultFileOps: FileOps = {
@@ -147,7 +158,10 @@ export class JsonRepository<T> {
       return;
     }
 
-    const backup = `${target}.replace-backup-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const backup = path.join(
+      path.dirname(target),
+      `${path.basename(target)}.replace-backup-${Date.now()}-${process.hrtime.bigint()}-${randomUUID()}`
+    );
     await this.fileOps.rename(target, backup);
 
     try {
@@ -202,7 +216,7 @@ export class JsonRepository<T> {
     await this.cleanupBackupFiles(backups.filter((backup) => backup.path !== restored.path).map((backup) => backup.path));
   }
 
-  private async listResidualBackups(directory: string): Promise<Array<{ path: string; name: string; mtimeMs: number }>> {
+  private async listResidualBackups(directory: string): Promise<ResidualBackup[]> {
     const prefix = `${path.basename(this.filename)}.replace-backup-`;
     const entries = await this.fileOps.readdir(directory).catch((error: unknown) => {
       if (isMissingFileError(error)) {
@@ -211,13 +225,18 @@ export class JsonRepository<T> {
       throw error;
     });
 
-    const backups: Array<{ path: string; name: string; mtimeMs: number }> = [];
+    const backups: ResidualBackup[] = [];
     for (const entry of entries) {
       if (!entry.startsWith(prefix)) continue;
       const fullPath = path.join(directory, entry);
       try {
         const fileStat = await this.fileOps.stat(fullPath);
-        backups.push({ path: fullPath, name: entry, mtimeMs: fileStat.mtimeMs });
+        backups.push({
+          path: fullPath,
+          name: entry,
+          mtimeMs: fileStat.mtimeMs,
+          parsedName: parseResidualBackupName(entry, prefix)
+        });
       } catch (error) {
         if (!isMissingFileError(error)) {
           throw error;
@@ -226,7 +245,14 @@ export class JsonRepository<T> {
     }
 
     backups.sort((left, right) => {
-      if (left.mtimeMs !== right.mtimeMs) {
+      if (left.parsedName && right.parsedName) {
+        if (left.parsedName.epochMs !== right.parsedName.epochMs) {
+          return right.parsedName.epochMs - left.parsedName.epochMs;
+        }
+        if (left.parsedName.hrtimeNs !== right.parsedName.hrtimeNs) {
+          return right.parsedName.hrtimeNs > left.parsedName.hrtimeNs ? 1 : -1;
+        }
+      } else if (left.mtimeMs !== right.mtimeMs) {
         return right.mtimeMs - left.mtimeMs;
       }
       return right.name.localeCompare(left.name);
@@ -236,9 +262,9 @@ export class JsonRepository<T> {
   }
 
   private async tryRestoreFromBackups(
-    backups: Array<{ path: string; name: string; mtimeMs: number }>,
+    backups: ResidualBackup[],
     beforeRestore?: () => Promise<void>
-  ): Promise<{ path: string; name: string; mtimeMs: number } | null> {
+  ): Promise<ResidualBackup | null> {
     for (const backup of backups) {
       const parsed = await this.tryReadAndParse(backup.path);
       if (parsed.status !== "valid") {
@@ -302,4 +328,30 @@ function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseResidualBackupName(name: string, prefix: string): { epochMs: number; hrtimeNs: bigint } | null {
+  const suffix = name.slice(prefix.length);
+  const firstDash = suffix.indexOf("-");
+  if (firstDash <= 0) {
+    return null;
+  }
+
+  const secondDash = suffix.indexOf("-", firstDash + 1);
+  if (secondDash <= firstDash + 1) {
+    return null;
+  }
+
+  const epochMsRaw = suffix.slice(0, firstDash);
+  const hrtimeRaw = suffix.slice(firstDash + 1, secondDash);
+  const uuidRaw = suffix.slice(secondDash + 1);
+
+  if (!/^\d+$/.test(epochMsRaw) || !/^\d+$/.test(hrtimeRaw) || uuidRaw.length === 0) {
+    return null;
+  }
+
+  return {
+    epochMs: Number(epochMsRaw),
+    hrtimeNs: BigInt(hrtimeRaw)
+  };
 }
