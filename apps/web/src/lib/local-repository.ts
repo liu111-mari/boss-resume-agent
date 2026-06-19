@@ -132,7 +132,7 @@ export class JsonRepository<T> {
       throw error;
     }
 
-    await this.fileOps.rm(backup, { force: true });
+    await this.fileOps.rm(backup, { force: true }).catch(() => undefined);
   }
 
   private async restoreBackup(backup: string, target: string): Promise<void> {

@@ -308,4 +308,47 @@ describe("JsonRepository", () => {
       worker.kill();
     }
   });
+
+  it("does not reject when windows backup cleanup fails after the new target is committed", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "boss-agent-local-repository-"));
+    const filename = path.join(tempDir, "state.json");
+    await writeFile(filename, JSON.stringify({ version: 1, nested: { label: "stable" } }), "utf8");
+
+    const injectedOps = {
+      mkdir,
+      readFile,
+      writeFile,
+      stat,
+      async rename(source: Parameters<typeof rename>[0], target: Parameters<typeof rename>[1]) {
+        return rename(source, target);
+      },
+      async rm(target: Parameters<typeof rm>[0], options?: Parameters<typeof rm>[1]) {
+        const targetPath = String(target);
+        if (path.basename(targetPath).includes(".replace-backup-")) {
+          throw new Error("backup cleanup failed");
+        }
+        return rm(target, options);
+      }
+    };
+
+    const repo = new JsonRepository(
+      filename,
+      sampleSchema,
+      { version: 0, nested: { label: "default" } },
+      injectedOps,
+      () => "win32"
+    );
+
+    await expect(repo.write({ version: 2, nested: { label: "new" } })).resolves.toEqual({
+      version: 2,
+      nested: { label: "new" }
+    });
+    await expect(repo.read()).resolves.toEqual({
+      version: 2,
+      nested: { label: "new" }
+    });
+
+    const files = await readdir(tempDir);
+    expect(files.some((file) => file.includes(".replace-backup-"))).toBe(true);
+  });
 });
