@@ -36,6 +36,7 @@ function createFilterConfig(overrides: Partial<FilterConfig> = {}): FilterConfig
   return {
     targetTitles: [],
     cities: [],
+    salaryUnit: "day",
     minSalary: null,
     maxSalary: null,
     employmentTypes: [],
@@ -154,12 +155,14 @@ describe("evaluateJob", () => {
     const result = evaluateJob(
       createJob({
         company: "黑名单公司",
+        industry: "FinTech",
         title: "销售专员",
         city: "北京",
         jdText: "需要销售经验"
       }),
       createFilterConfig({
         blockedCompanies: ["黑名单"],
+        blockedIndustries: ["fintech"],
         excludedKeywords: ["销售"],
         targetTitles: ["数据分析师"],
         cities: ["上海"],
@@ -174,6 +177,25 @@ describe("evaluateJob", () => {
     expect(result).toEqual({
       accepted: false,
       reasons: ["命中屏蔽公司：黑名单"]
+    });
+  });
+
+  it("rejects blocked industries before excluded keywords", () => {
+    const result = evaluateJob(
+      createJob({
+        industry: "ＡＩ Saas",
+        title: "产品销售",
+        jdText: "需要销售经验"
+      }),
+      createFilterConfig({
+        blockedIndustries: ["ai saas"],
+        excludedKeywords: ["销售"]
+      })
+    );
+
+    expect(result).toEqual({
+      accepted: false,
+      reasons: ["命中屏蔽行业：ai saas"]
     });
   });
 
@@ -229,11 +251,11 @@ describe("evaluateJob", () => {
     });
   });
 
-  it("accepts overlapping salary ranges for day and monthly units without mixing them", () => {
+  it("accepts overlapping salary ranges only when units match", () => {
     expect(
       evaluateJob(
         createJob({ salary: "150-200元/天" }),
-        createFilterConfig({ minSalary: 180, maxSalary: 220 })
+        { ...createFilterConfig({ minSalary: 180, maxSalary: 220 }), salaryUnit: "day" } as FilterConfig
       )
     ).toEqual({
       accepted: true,
@@ -242,8 +264,11 @@ describe("evaluateJob", () => {
 
     expect(
       evaluateJob(
-        createJob({ salary: "15-25K" }),
-        createFilterConfig({ minSalary: 20, maxSalary: 30 })
+        createJob({ salary: "15 - 25k ·13薪" }),
+        {
+          ...createFilterConfig({ minSalary: 20000, maxSalary: 30000 }),
+          salaryUnit: "month"
+        } as FilterConfig
       )
     ).toEqual({
       accepted: true,
@@ -251,11 +276,44 @@ describe("evaluateJob", () => {
     });
   });
 
+  it("rejects parsed salaries when config and job units do not match", () => {
+    const result = evaluateJob(
+      createJob({ salary: "15-25K" }),
+      {
+        ...createFilterConfig({ minSalary: 150, maxSalary: 250 }),
+        salaryUnit: "day"
+      } as FilterConfig
+    );
+
+    expect(result).toEqual({
+      accepted: false,
+      reasons: ["薪资单位不匹配：15-25K"]
+    });
+  });
+
+  it("rejects parsed salaries with non-overlapping ranges in the same unit", () => {
+    const result = evaluateJob(
+      createJob({ salary: "15-25K" }),
+      {
+        ...createFilterConfig({ minSalary: 26000, maxSalary: 30000 }),
+        salaryUnit: "month"
+      } as FilterConfig
+    );
+
+    expect(result).toEqual({
+      accepted: false,
+      reasons: ["薪资范围不匹配：15-25K"]
+    });
+  });
+
   it("does not reject when salary is missing or unsupported and records unrecognized salary", () => {
     expect(
       evaluateJob(
         createJob({ salary: "" }),
-        createFilterConfig({ minSalary: 20, maxSalary: 30 })
+        {
+          ...createFilterConfig({ minSalary: 20000, maxSalary: 30000 }),
+          salaryUnit: "month"
+        } as FilterConfig
       )
     ).toEqual({
       accepted: true,
@@ -265,7 +323,10 @@ describe("evaluateJob", () => {
     expect(
       evaluateJob(
         createJob({ salary: "面议" }),
-        createFilterConfig({ minSalary: 20, maxSalary: 30 })
+        {
+          ...createFilterConfig({ minSalary: 20000, maxSalary: 30000 }),
+          salaryUnit: "month"
+        } as FilterConfig
       )
     ).toEqual({
       accepted: true,
@@ -276,13 +337,16 @@ describe("evaluateJob", () => {
   it("matches target titles and required keywords case-insensitively", () => {
     const result = evaluateJob(
       createJob({
-        title: "AI Product Intern",
-        jdText: "Built pipelines and RAG evaluation workflows"
+        title: "ＡI Product Intern",
+        jdText: "Built pipelines and RAＧ evaluation workflows"
       }),
-      createFilterConfig({
+      {
+        ...createFilterConfig({
         targetTitles: ["ai product"],
         requiredKeywords: ["rag"]
-      })
+        }),
+        salaryUnit: "day"
+      } as FilterConfig
     );
 
     expect(result).toEqual({
@@ -417,6 +481,31 @@ describe("selectProfileItems", () => {
 
     expect(result.skills.map((item) => item.id)).toEqual(["skill-rag"]);
     expect(result.projects).toEqual([]);
+  });
+
+  it("matches profile content and tags with NFKC normalization", () => {
+    const profile: Profile = {
+      school: "",
+      major: "",
+      graduation: "",
+      direction: "",
+      items: [
+        {
+          id: "skill-fullwidth",
+          category: "skill",
+          content: "Built ＲＡＧ workflow",
+          tags: ["Cafe\u0301"],
+          enabled: true
+        }
+      ]
+    };
+
+    expect(
+      selectProfileItems(profile, ["rag", "café"], {
+        maxSkills: 2,
+        maxProjects: 1
+      }).skills.map((item) => item.id)
+    ).toEqual(["skill-fullwidth"]);
   });
 });
 

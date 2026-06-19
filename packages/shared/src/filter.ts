@@ -5,7 +5,7 @@ export type HardFilterResult = {
   reasons: string[];
 };
 
-type SalaryUnit = "day" | "month_k";
+type SalaryUnit = "day" | "month";
 
 type SalaryRange = {
   min: number;
@@ -17,6 +17,11 @@ export function evaluateJob(job: JobCard, config: FilterConfig): HardFilterResul
   const blockedCompany = findFirstMatch(job.company, config.blockedCompanies);
   if (blockedCompany) {
     return reject(`命中屏蔽公司：${blockedCompany}`);
+  }
+
+  const blockedIndustry = findFirstMatch(job.industry, config.blockedIndustries);
+  if (blockedIndustry) {
+    return reject(`命中屏蔽行业：${blockedIndustry}`);
   }
 
   const excludedKeyword = findFirstMatch(
@@ -70,6 +75,10 @@ export function evaluateJob(job: JobCard, config: FilterConfig): HardFilterResul
     if (!parsedSalary) {
       salaryReasons.push("薪资未识别");
     } else {
+      if (parsedSalary.unit !== config.salaryUnit) {
+        return reject(`薪资单位不匹配：${job.salary}`);
+      }
+
       const expectedMin = config.minSalary ?? Number.NEGATIVE_INFINITY;
       const expectedMax = config.maxSalary ?? Number.POSITIVE_INFINITY;
       if (parsedSalary.max < expectedMin || parsedSalary.min > expectedMax) {
@@ -92,7 +101,7 @@ function reject(reason: string): HardFilterResult {
 }
 
 function includesIgnoreCase(source: string, candidate: string): boolean {
-  return source.toLocaleLowerCase().includes(candidate.toLocaleLowerCase());
+  return normalizeForMatch(source).includes(normalizeForMatch(candidate));
 }
 
 function findFirstMatch(source: string, candidates: string[]): string | null {
@@ -100,12 +109,14 @@ function findFirstMatch(source: string, candidates: string[]): string | null {
 }
 
 function parseSalaryRange(input: string): SalaryRange | null {
-  const normalized = input.trim().replace(/\s+/g, "");
+  const normalized = normalizeForMatch(input).replace(/\s+/g, "");
   if (!normalized) {
     return null;
   }
 
-  const dayMatch = normalized.match(/^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)元\/天$/i);
+  const dayMatch = normalized.match(
+    /^(\d+(?:\.\d+)?)[\-–—－~～至](\d+(?:\.\d+)?)元\/天$/i
+  );
   if (dayMatch) {
     return {
       min: Number(dayMatch[1]),
@@ -114,14 +125,20 @@ function parseSalaryRange(input: string): SalaryRange | null {
     };
   }
 
-  const monthMatch = normalized.match(/^(\d+(?:\.\d+)?)-(\d+(?:\.\d+)?)K$/i);
+  const monthMatch = normalized.match(
+    /^(\d+(?:\.\d+)?)[\-–—－~～至](\d+(?:\.\d+)?)k(?:·\d+薪)?$/i
+  );
   if (monthMatch) {
     return {
-      min: Number(monthMatch[1]),
-      max: Number(monthMatch[2]),
-      unit: "month_k"
+      min: Number(monthMatch[1]) * 1000,
+      max: Number(monthMatch[2]) * 1000,
+      unit: "month"
     };
   }
 
   return null;
+}
+
+function normalizeForMatch(input: string): string {
+  return input.normalize("NFKC").toLocaleLowerCase();
 }

@@ -32,6 +32,7 @@ export const filterConfigSchema = z
   .object({
     targetTitles: z.array(z.string()).default([]),
     cities: z.array(z.string()).default([]),
+    salaryUnit: z.enum(["day", "month"]).default("day"),
     minSalary: z.number().nonnegative().nullable().default(null),
     maxSalary: z.number().nonnegative().nullable().default(null),
     employmentTypes: z.array(z.enum(["internship", "campus", "social"])).default([]),

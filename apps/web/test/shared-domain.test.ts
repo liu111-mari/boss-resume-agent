@@ -24,6 +24,7 @@ describe("shared greeting automation domain schemas", () => {
     expect(filterConfigSchema.parse({})).toEqual({
       targetTitles: [],
       cities: [],
+      salaryUnit: "day",
       minSalary: null,
       maxSalary: null,
       employmentTypes: [],
@@ -42,6 +43,7 @@ describe("shared greeting automation domain schemas", () => {
     const result = filterConfigSchema.parse({
       targetTitles: ["数据分析师"],
       cities: ["上海"],
+      salaryUnit: "month",
       minSalary: 12000,
       maxSalary: 25000,
       employmentTypes: ["campus", "social"],
@@ -58,6 +60,7 @@ describe("shared greeting automation domain schemas", () => {
     expect(result).toMatchObject({
       targetTitles: ["数据分析师"],
       cities: ["上海"],
+      salaryUnit: "month",
       minSalary: 12000,
       maxSalary: 25000,
       employmentTypes: ["campus", "social"],

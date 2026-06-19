@@ -102,9 +102,13 @@ function compareRankedItems(
 }
 
 function includesIgnoreCase(source: string, candidate: string): boolean {
-  return source.toLocaleLowerCase().includes(candidate.toLocaleLowerCase());
+  return normalizeForMatch(source).includes(normalizeForMatch(candidate));
 }
 
 function collapseWhitespace(input: string): string {
   return input.replace(/\s+/g, " ").trim();
+}
+
+function normalizeForMatch(input: string): string {
+  return input.normalize("NFKC").toLocaleLowerCase();
 }
