@@ -1,12 +1,26 @@
+import { greetingTaskSchema } from "@boss-agent/shared";
 import { NextResponse } from "next/server";
-import { createGreetingTasks, store } from "@/lib/store";
+import { z } from "zod";
+
+import { getDomainStore } from "@/lib/domain-store";
+import { parseJsonBody, withApiErrorHandling } from "@/lib/http";
 
 export async function GET() {
-  return NextResponse.json({ tasks: store.tasks });
+  return withApiErrorHandling(async () => {
+    const tasks = await getDomainStore().getTasks();
+    return NextResponse.json({ tasks });
+  });
 }
 
 export async function POST(request: Request) {
-  const body = await request.json();
-  const tasks = createGreetingTasks(Array.isArray(body.jobIds) ? body.jobIds : []);
-  return NextResponse.json({ tasks });
+  return withApiErrorHandling(async () => {
+    const body = await parseJsonBody(
+      request,
+      z.object({
+        task: greetingTaskSchema
+      })
+    );
+    const task = await getDomainStore().createOrUpdateTask(body.task);
+    return NextResponse.json({ task });
+  });
 }

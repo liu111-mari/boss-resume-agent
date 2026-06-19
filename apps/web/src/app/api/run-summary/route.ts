@@ -7,20 +7,29 @@ export async function GET() {
   return withApiErrorHandling(async () => {
     const store = getDomainStore();
     const date = getLocalDateKey();
-    const [tasks, usage, config] = await Promise.all([
-      store.getApprovedTasks(),
+    const [config, usage, tasks, logs] = await Promise.all([
+      store.getConfig(),
       store.getDailyUsage(date),
-      store.getConfig()
+      store.getTasks(),
+      store.getRunLogs()
     ]);
 
+    const taskStatusCounts = tasks.reduce<Record<string, number>>((counts, task) => {
+      counts[task.status] = (counts[task.status] ?? 0) + 1;
+      return counts;
+    }, {});
+
+    const recentLogs = logs
+      .slice()
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+      .slice(0, 20);
+
     return NextResponse.json({
-      tasks,
-      quota: {
-        date,
-        usage,
-        config,
-        remaining: Math.max((config.dailyLimit ?? 0) - usage.confirmedSends, 0)
-      }
+      date,
+      config,
+      usage,
+      taskStatusCounts,
+      recentLogs
     });
   });
 }

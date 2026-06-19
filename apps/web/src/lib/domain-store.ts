@@ -42,6 +42,7 @@ const dailyUsageSchema = z.object({
 const runLogListSchema = z.array(runLogEntrySchema);
 const dailyUsageListSchema = z.array(dailyUsageSchema);
 const baseDirMutationQueues = new Map<string, Promise<unknown>>();
+const domainStoreCache = new Map<string, ReturnType<typeof createDomainStore>>();
 
 const defaultTemplate = greetingTemplateSchema.parse({
   body: "您好，我是{{school}}{{major}}专业学生，关注到{{jobTitle}}岗位，期待进一步沟通。",
@@ -92,10 +93,16 @@ export class DomainEntityNotFoundError extends Error {
   }
 }
 
+export function resolveDomainStoreBaseDir(
+  baseDir = process.env.BOSS_AGENT_DATA_DIR ?? path.join(process.cwd(), ".boss-agent-data")
+): string {
+  return path.resolve(baseDir);
+}
+
 export function createDomainStore(
   baseDir = process.env.BOSS_AGENT_DATA_DIR ?? path.join(process.cwd(), ".boss-agent-data")
 ) {
-  const resolvedBaseDir = path.resolve(baseDir);
+  const resolvedBaseDir = resolveDomainStoreBaseDir(baseDir);
   const repositories = {
     config: new JsonRepository(path.join(resolvedBaseDir, "config.json"), filterConfigSchema, filterConfigSchema.parse({})),
     profile: new JsonRepository(path.join(resolvedBaseDir, "profile.json"), profileSchema, profileSchema.parse({})),
@@ -265,6 +272,10 @@ export function createDomainStore(
     return usage.find((item) => item.date === date) ?? createDefaultDailyUsage(date);
   }
 
+  async function getDailyUsageHistory(): Promise<DailyUsage[]> {
+    return repositories.dailyUsage.read();
+  }
+
   async function incrementConfirmedSend(date: string): Promise<DailyUsage> {
     return queueMutation("daily-usage", async () => {
       const usage = await repositories.dailyUsage.read();
@@ -317,6 +328,7 @@ export function createDomainStore(
     transitionTask,
     getApprovedTasks,
     getDailyUsage,
+    getDailyUsageHistory,
     incrementConfirmedSend,
     appendRunLog,
     getRunLogs
@@ -366,6 +378,31 @@ export function createDomainStore(
       return validated.map(({ current, next }) => (hasTaskChanged(current, next) ? next : current));
     });
   }
+}
+
+export function getDomainStore(
+  baseDir = process.env.BOSS_AGENT_DATA_DIR ?? path.join(process.cwd(), ".boss-agent-data")
+) {
+  const resolvedBaseDir = resolveDomainStoreBaseDir(baseDir);
+  const existing = domainStoreCache.get(resolvedBaseDir);
+  if (existing) {
+    return existing;
+  }
+
+  const created = createDomainStore(resolvedBaseDir);
+  domainStoreCache.set(resolvedBaseDir, created);
+  return created;
+}
+
+export function resetDomainStoreCache(
+  baseDir?: string
+): void {
+  if (baseDir) {
+    domainStoreCache.delete(resolveDomainStoreBaseDir(baseDir));
+    return;
+  }
+
+  domainStoreCache.clear();
 }
 
 function createDefaultDailyUsage(date: string): DailyUsage {

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   filterConfigSchema,
@@ -7,13 +7,6 @@ import {
   profileSchema,
   type GreetingTask
 } from "@boss-agent/shared";
-import {
-  approveTasks,
-  createGreetingTasks,
-  store,
-  updateTaskStatus,
-  upsertJobs
-} from "@/lib/store";
 
 // @ts-expect-error legacy draft status must not be assignable to the schema-inferred type
 const legacyDraftStatus: GreetingTask["status"] = "draft";
@@ -166,133 +159,5 @@ describe("shared greeting automation domain schemas", () => {
     if (!result.success) {
       expect(result.error.issues[0].path).toEqual(["maxLength"]);
     }
-  });
-});
-
-describe("greeting task store state", () => {
-  beforeEach(() => {
-    store.jobs.length = 0;
-    store.conversations.length = 0;
-    store.tasks.length = 0;
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("creates pending review tasks with updatedAt", () => {
-    upsertJobs([
-      {
-        id: "job-1",
-        title: "AI 产品经理",
-        company: "示例科技",
-        city: "上海",
-        collectedAt: "2026-06-18T08:00:00.000Z"
-      }
-    ]);
-
-    const [task] = createGreetingTasks(["job-1"]);
-
-    expect(task.status).toBe("pending_review");
-    expect(task.updatedAt).toEqual(expect.any(String));
-    expect(Number.isNaN(Date.parse(task.updatedAt))).toBe(false);
-  });
-
-  it("approves only pending review tasks", () => {
-    upsertJobs([
-      {
-        id: "job-2",
-        title: "数据分析师",
-        company: "示例数据",
-        city: "杭州",
-        collectedAt: "2026-06-18T08:00:00.000Z"
-      },
-      {
-        id: "job-3",
-        title: "产品经理",
-        company: "示例产品",
-        city: "上海",
-        collectedAt: "2026-06-18T08:00:00.000Z"
-      }
-    ]);
-    const [pendingTask, failedTask] = createGreetingTasks(["job-2", "job-3"]);
-    failedTask.status = "failed";
-    pendingTask.updatedAt = "2026-06-18T08:00:00.000Z";
-    failedTask.updatedAt = "2026-06-18T08:00:00.000Z";
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-19T09:30:00.000Z"));
-
-    approveTasks([pendingTask.id, failedTask.id]);
-
-    expect(pendingTask.status).toBe("approved");
-    expect(pendingTask.updatedAt).toBe("2026-06-19T09:30:00.000Z");
-    expect(failedTask.status).toBe("failed");
-    expect(failedTask.updatedAt).toBe("2026-06-18T08:00:00.000Z");
-  });
-
-  it("updates updatedAt when updateTaskStatus changes status", () => {
-    upsertJobs([
-      {
-        id: "job-4",
-        title: "实施顾问",
-        company: "示例咨询",
-        city: "深圳",
-        collectedAt: "2026-06-18T08:00:00.000Z"
-      }
-    ]);
-    const [task] = createGreetingTasks(["job-4"]);
-    task.updatedAt = "2026-06-18T08:00:00.000Z";
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-19T10:45:00.000Z"));
-
-    updateTaskStatus(task.id, "sending");
-
-    expect(task.status).toBe("sending");
-    expect(task.updatedAt).toBe("2026-06-19T10:45:00.000Z");
-  });
-
-  it("updates updatedAt when failureReason changes without a status change", () => {
-    upsertJobs([
-      {
-        id: "job-5",
-        title: "产品运营",
-        company: "示例运营",
-        city: "北京",
-        collectedAt: "2026-06-18T08:00:00.000Z"
-      }
-    ]);
-    const [task] = createGreetingTasks(["job-5"]);
-    task.status = "failed";
-    task.failureReason = "network error";
-    task.updatedAt = "2026-06-18T08:00:00.000Z";
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-19T11:30:00.000Z"));
-
-    updateTaskStatus(task.id, "failed", "quota exceeded");
-
-    expect(task.failureReason).toBe("quota exceeded");
-    expect(task.updatedAt).toBe("2026-06-19T11:30:00.000Z");
-  });
-
-  it("preserves updatedAt when status and failureReason do not change", () => {
-    upsertJobs([
-      {
-        id: "job-6",
-        title: "AI Agent 工程师",
-        company: "示例智能",
-        city: "广州",
-        collectedAt: "2026-06-18T08:00:00.000Z"
-      }
-    ]);
-    const [task] = createGreetingTasks(["job-6"]);
-    task.status = "failed";
-    task.failureReason = "network error";
-    task.updatedAt = "2026-06-18T08:00:00.000Z";
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-06-19T12:00:00.000Z"));
-
-    updateTaskStatus(task.id, "failed", "network error");
-
-    expect(task.updatedAt).toBe("2026-06-18T08:00:00.000Z");
   });
 });

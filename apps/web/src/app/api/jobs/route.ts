@@ -1,12 +1,29 @@
+import { jobCardSchema } from "@boss-agent/shared";
 import { NextResponse } from "next/server";
-import { store, upsertJobs } from "@/lib/store";
+import { z } from "zod";
+
+import { getDomainStore } from "@/lib/domain-store";
+import { parseJsonBody, withApiErrorHandling } from "@/lib/http";
 
 export async function GET() {
-  return NextResponse.json({ jobs: store.jobs });
+  return withApiErrorHandling(async () => {
+    const jobs = await getDomainStore().getJobs();
+    return NextResponse.json({ jobs });
+  });
 }
 
 export async function POST(request: Request) {
-  const body = await request.json();
-  const jobs = upsertJobs(Array.isArray(body.jobs) ? body.jobs : [body]);
-  return NextResponse.json({ jobs });
+  return withApiErrorHandling(async () => {
+    const payload = await parseJsonBody(
+      request,
+      z.union([
+        jobCardSchema,
+        z.object({
+          jobs: z.array(jobCardSchema)
+        })
+      ])
+    );
+    const jobs = await getDomainStore().upsertJobs("jobs" in payload ? payload.jobs : [payload]);
+    return NextResponse.json({ jobs });
+  });
 }
