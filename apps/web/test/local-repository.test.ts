@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -225,5 +226,86 @@ describe("JsonRepository", () => {
       version: 1,
       nested: { label: "stable" }
     });
+  });
+
+  it("uses direct rename on posix replacement without deleting the target first", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "boss-agent-local-repository-"));
+    const filename = path.join(tempDir, "state.json");
+    await writeFile(filename, JSON.stringify({ version: 1, nested: { label: "stable" } }), "utf8");
+
+    const operations: string[] = [];
+    const targetRemovals: string[] = [];
+    const recordingOps = {
+      mkdir,
+      readFile,
+      writeFile,
+      stat,
+      async rename(source: Parameters<typeof rename>[0], target: Parameters<typeof rename>[1]) {
+        operations.push(`rename:${path.basename(String(source))}->${path.basename(String(target))}`);
+        return rename(source, target);
+      },
+      async rm(target: Parameters<typeof rm>[0], options?: Parameters<typeof rm>[1]) {
+        const targetPath = String(target);
+        operations.push(`rm:${path.basename(targetPath)}`);
+        if (path.resolve(targetPath) === path.resolve(filename)) {
+          targetRemovals.push(targetPath);
+        }
+        return rm(target, options);
+      }
+    };
+
+    const repo = new JsonRepository(
+      filename,
+      sampleSchema,
+      { version: 0, nested: { label: "default" } },
+      recordingOps,
+      () => "linux"
+    );
+
+    await repo.write({ version: 2, nested: { label: "new" } });
+
+    expect(targetRemovals).toEqual([]);
+    expect(operations).toContainEqual(expect.stringMatching(/^rename:state\.json\.tmp-.*->state\.json$/));
+    expect(operations).not.toContainEqual(expect.stringMatching(/^rename:state\.json->state\.json\.replace-backup-/));
+  });
+
+  it("waits for an external process holding the file lock before writing", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "boss-agent-local-repository-"));
+    const filename = path.join(tempDir, "state.json");
+    const lockPath = `${filename}.lock`;
+    const workerPath = path.join(process.cwd(), "apps/web/test/helpers/fs-lock-worker.mjs");
+    const repo = new JsonRepository(filename, sampleSchema, { version: 0, nested: { label: "default" } });
+
+    const worker = spawn(process.execPath, [workerPath, lockPath, "250"], {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    const workerReady = new Promise<void>((resolve, reject) => {
+      worker.stdout.setEncoding("utf8");
+      worker.stdout.on("data", (chunk) => {
+        if (chunk.includes("locked")) resolve();
+      });
+      worker.once("error", reject);
+      worker.once("exit", (code) => {
+        if (code !== 0) reject(new Error(`lock worker exited with code ${code}`));
+      });
+    });
+
+    try {
+      await workerReady;
+
+      const startedAt = Date.now();
+      await repo.write({ version: 1, nested: { label: "after-lock" } });
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(elapsedMs).toBeGreaterThanOrEqual(150);
+      await expect(repo.read()).resolves.toEqual({
+        version: 1,
+        nested: { label: "after-lock" }
+      });
+    } finally {
+      worker.kill();
+    }
   });
 });

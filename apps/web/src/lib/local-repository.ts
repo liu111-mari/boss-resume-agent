@@ -1,25 +1,7 @@
-import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { ZodType } from "zod";
-
-type FileOps = {
-  mkdir: typeof mkdir;
-  readFile: typeof readFile;
-  rename: typeof rename;
-  rm: typeof rm;
-  stat: typeof stat;
-  writeFile: typeof writeFile;
-};
-
-const defaultFileOps: FileOps = {
-  mkdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-  writeFile
-};
+import { defaultFileOps, type FileOps, withFilesystemLock } from "@/lib/filesystem-lock";
 
 const fileOperationQueues = new Map<string, Promise<unknown>>();
 
@@ -37,43 +19,48 @@ async function ensureParentDirectory(filename: string, fileOps: FileOps): Promis
 
 export class JsonRepository<T> {
   private readonly defaultValue: T;
+  private readonly lockPath: string;
   private readonly resolvedFilename: string;
 
   constructor(
     private readonly filename: string,
     private readonly schema: ZodType<T>,
     defaultValue: T,
-    private readonly fileOps: FileOps = defaultFileOps
+    private readonly fileOps: FileOps = defaultFileOps,
+    private readonly platformProvider: () => NodeJS.Platform = () => process.platform
   ) {
     this.defaultValue = deepClone(this.schema.parse(defaultValue));
     this.resolvedFilename = path.resolve(filename);
+    this.lockPath = `${this.resolvedFilename}.lock`;
   }
 
   async read(): Promise<T> {
-    return this.enqueue(async () => {
-      await ensureParentDirectory(this.filename, this.fileOps);
+    return this.enqueue(() =>
+      withFilesystemLock(this.lockPath, async () => {
+        await ensureParentDirectory(this.filename, this.fileOps);
 
-      let content: string;
-      try {
-        content = await this.fileOps.readFile(this.filename, "utf8");
-      } catch (error) {
-        if (isMissingFileError(error)) {
-          return deepClone(this.defaultValue);
+        let content: string;
+        try {
+          content = await this.fileOps.readFile(this.filename, "utf8");
+        } catch (error) {
+          if (isMissingFileError(error)) {
+            return deepClone(this.defaultValue);
+          }
+          throw error;
         }
-        throw error;
-      }
 
-      try {
-        return deepClone(this.schema.parse(JSON.parse(content) as unknown));
-      } catch (error) {
-        await this.backupCorruptFile();
-        throw new Error(`配置文件损坏：${this.filename}`, { cause: error });
-      }
-    });
+        try {
+          return deepClone(this.schema.parse(JSON.parse(content) as unknown));
+        } catch (error) {
+          await this.backupCorruptFile();
+          throw new Error(`配置文件损坏：${this.filename}`, { cause: error });
+        }
+      }, { fileOps: this.fileOps })
+    );
   }
 
   async write(value: T): Promise<T> {
-    return this.enqueue(() => this.performWrite(value));
+    return this.enqueue(() => withFilesystemLock(this.lockPath, () => this.performWrite(value), { fileOps: this.fileOps }));
   }
 
   private async performWrite(value: T): Promise<T> {
@@ -117,6 +104,11 @@ export class JsonRepository<T> {
   }
 
   private async replaceFileSafely(source: string, target: string): Promise<void> {
+    if (this.platformProvider() !== "win32") {
+      await this.fileOps.rename(source, target);
+      return;
+    }
+
     const targetExists = await this.fileOps
       .stat(target)
       .then(() => true)
@@ -126,12 +118,6 @@ export class JsonRepository<T> {
       });
 
     if (!targetExists) {
-      await this.fileOps.rename(source, target);
-      return;
-    }
-
-    if (process.platform !== "win32") {
-      await this.fileOps.rm(target, { force: true });
       await this.fileOps.rename(source, target);
       return;
     }
