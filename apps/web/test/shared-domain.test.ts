@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   filterConfigSchema,
@@ -11,6 +11,7 @@ import {
   approveTasks,
   createGreetingTasks,
   store,
+  updateTaskStatus,
   upsertJobs
 } from "@/lib/store";
 
@@ -19,6 +20,24 @@ const legacyDraftStatus: GreetingTask["status"] = "draft";
 void legacyDraftStatus;
 
 describe("shared greeting automation domain schemas", () => {
+  it("applies the complete filter configuration defaults", () => {
+    expect(filterConfigSchema.parse({})).toEqual({
+      targetTitles: [],
+      cities: [],
+      minSalary: null,
+      maxSalary: null,
+      employmentTypes: [],
+      requiredKeywords: [],
+      excludedKeywords: [],
+      blockedCompanies: [],
+      blockedIndustries: [],
+      allowedExperience: [],
+      allowedEducation: [],
+      scoreThreshold: 70,
+      dailyLimit: 100
+    });
+  });
+
   it("parses the complete filter configuration", () => {
     const result = filterConfigSchema.parse({
       targetTitles: ["数据分析师"],
@@ -51,6 +70,18 @@ describe("shared greeting automation domain schemas", () => {
       scoreThreshold: 75,
       dailyLimit: 80
     });
+  });
+
+  it("rejects a maximum salary below the minimum salary", () => {
+    const result = filterConfigSchema.safeParse({
+      minSalary: 20000,
+      maxSalary: 10000
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].path).toEqual(["maxSalary"]);
+    }
   });
 
   it("parses a pending review greeting task with update metadata", () => {
@@ -120,6 +151,19 @@ describe("shared greeting automation domain schemas", () => {
       version: 1
     });
   });
+
+  it("rejects a template maximum length below its minimum length", () => {
+    const result = greetingTemplateSchema.safeParse({
+      body: "你好",
+      minLength: 100,
+      maxLength: 50
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0].path).toEqual(["maxLength"]);
+    }
+  });
 });
 
 describe("greeting task store state", () => {
@@ -127,6 +171,10 @@ describe("greeting task store state", () => {
     store.jobs.length = 0;
     store.conversations.length = 0;
     store.tasks.length = 0;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it("creates pending review tasks with updatedAt", () => {
@@ -166,10 +214,37 @@ describe("greeting task store state", () => {
     ]);
     const [pendingTask, failedTask] = createGreetingTasks(["job-2", "job-3"]);
     failedTask.status = "failed";
+    pendingTask.updatedAt = "2026-06-18T08:00:00.000Z";
+    failedTask.updatedAt = "2026-06-18T08:00:00.000Z";
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-19T09:30:00.000Z"));
 
     approveTasks([pendingTask.id, failedTask.id]);
 
     expect(pendingTask.status).toBe("approved");
+    expect(pendingTask.updatedAt).toBe("2026-06-19T09:30:00.000Z");
     expect(failedTask.status).toBe("failed");
+    expect(failedTask.updatedAt).toBe("2026-06-18T08:00:00.000Z");
+  });
+
+  it("updates updatedAt when updateTaskStatus changes status", () => {
+    upsertJobs([
+      {
+        id: "job-4",
+        title: "实施顾问",
+        company: "示例咨询",
+        city: "深圳",
+        collectedAt: "2026-06-18T08:00:00.000Z"
+      }
+    ]);
+    const [task] = createGreetingTasks(["job-4"]);
+    task.updatedAt = "2026-06-18T08:00:00.000Z";
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-19T10:45:00.000Z"));
+
+    updateTaskStatus(task.id, "sending");
+
+    expect(task.status).toBe("sending");
+    expect(task.updatedAt).toBe("2026-06-19T10:45:00.000Z");
   });
 });

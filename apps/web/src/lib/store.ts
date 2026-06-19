@@ -94,6 +94,7 @@ export function approveTasks(taskIds: string[]): GreetingTask[] {
   for (const task of store.tasks) {
     if (taskIds.includes(task.id) && task.status === "pending_review") {
       task.status = "approved";
+      task.updatedAt = new Date().toISOString();
     }
   }
   return store.tasks;
@@ -102,6 +103,9 @@ export function approveTasks(taskIds: string[]): GreetingTask[] {
 export function updateTaskStatus(taskId: string, status: GreetingTask["status"], failureReason = ""): GreetingTask | undefined {
   const task = store.tasks.find((item) => item.id === taskId);
   if (!task) return undefined;
+  if (task.status !== status) {
+    task.updatedAt = new Date().toISOString();
+  }
   task.status = status;
   task.failureReason = failureReason;
   return task;

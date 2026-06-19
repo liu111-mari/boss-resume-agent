@@ -28,21 +28,35 @@ export const jobCardSchema = z.object({
   collectedAt: z.string()
 });
 
-export const filterConfigSchema = z.object({
-  targetTitles: z.array(z.string()).default([]),
-  cities: z.array(z.string()).default([]),
-  minSalary: z.number().nonnegative().nullable().default(null),
-  maxSalary: z.number().nonnegative().nullable().default(null),
-  employmentTypes: z.array(z.enum(["internship", "campus", "social"])),
-  requiredKeywords: z.array(z.string()).default([]),
-  excludedKeywords: z.array(z.string()).default([]),
-  blockedCompanies: z.array(z.string()).default([]),
-  blockedIndustries: z.array(z.string()).default([]),
-  allowedExperience: z.array(z.string()).default([]),
-  allowedEducation: z.array(z.string()).default([]),
-  scoreThreshold: z.number().min(0).max(100).default(70),
-  dailyLimit: z.number().int().min(1).max(150).default(100)
-});
+export const filterConfigSchema = z
+  .object({
+    targetTitles: z.array(z.string()).default([]),
+    cities: z.array(z.string()).default([]),
+    minSalary: z.number().nonnegative().nullable().default(null),
+    maxSalary: z.number().nonnegative().nullable().default(null),
+    employmentTypes: z.array(z.enum(["internship", "campus", "social"])).default([]),
+    requiredKeywords: z.array(z.string()).default([]),
+    excludedKeywords: z.array(z.string()).default([]),
+    blockedCompanies: z.array(z.string()).default([]),
+    blockedIndustries: z.array(z.string()).default([]),
+    allowedExperience: z.array(z.string()).default([]),
+    allowedEducation: z.array(z.string()).default([]),
+    scoreThreshold: z.number().min(0).max(100).default(70),
+    dailyLimit: z.number().int().min(1).max(150).default(100)
+  })
+  .superRefine((config, context) => {
+    if (
+      config.minSalary !== null &&
+      config.maxSalary !== null &&
+      config.minSalary > config.maxSalary
+    ) {
+      context.addIssue({
+        code: "custom",
+        message: "maxSalary must be greater than or equal to minSalary",
+        path: ["maxSalary"]
+      });
+    }
+  });
 
 export const profileItemSchema = z.object({
   id: z.string(),
@@ -60,16 +74,26 @@ export const profileSchema = z.object({
   items: z.array(profileItemSchema).default([])
 });
 
-export const greetingTemplateSchema = z.object({
-  body: z.string().min(1),
-  tone: z.string().default("自然"),
-  minLength: z.number().int().min(1).default(30),
-  maxLength: z.number().int().min(20).max(500).default(120),
-  maxSkills: z.number().int().min(0).max(10).default(2),
-  maxProjects: z.number().int().min(0).max(5).default(1),
-  bannedPhrases: z.array(z.string()).default([]),
-  version: z.number().int().positive().default(1)
-});
+export const greetingTemplateSchema = z
+  .object({
+    body: z.string().min(1),
+    tone: z.string().default("自然"),
+    minLength: z.number().int().min(1).default(30),
+    maxLength: z.number().int().min(20).max(500).default(120),
+    maxSkills: z.number().int().min(0).max(10).default(2),
+    maxProjects: z.number().int().min(0).max(5).default(1),
+    bannedPhrases: z.array(z.string()).default([]),
+    version: z.number().int().positive().default(1)
+  })
+  .superRefine((template, context) => {
+    if (template.minLength > template.maxLength) {
+      context.addIssue({
+        code: "custom",
+        message: "maxLength must be greater than or equal to minLength",
+        path: ["maxLength"]
+      });
+    }
+  });
 
 export const greetingTaskStatusSchema = z.enum([
   "collected",
