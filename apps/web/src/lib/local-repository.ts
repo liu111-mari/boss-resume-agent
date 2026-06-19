@@ -19,10 +19,12 @@ type ResidualBackup = {
   path: string;
   name: string;
   mtimeMs: number;
-  parsedName: {
-    epochMs: number;
-    hrtimeNs: bigint;
-  } | null;
+  parsedName: ParsedResidualBackupName | null;
+};
+
+type ParsedResidualBackupName = {
+  epochMs: number;
+  hrtimeNs: bigint;
 };
 
 const defaultFileOps: FileOps = {
@@ -160,7 +162,7 @@ export class JsonRepository<T> {
 
     const backup = path.join(
       path.dirname(target),
-      `${path.basename(target)}.replace-backup-${Date.now()}-${process.hrtime.bigint()}-${randomUUID()}`
+      `${path.basename(target)}.replace-backup-v2-${Date.now()}-${process.hrtime.bigint()}-${randomUUID()}`
     );
     await this.fileOps.rename(target, backup);
 
@@ -330,28 +332,23 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function parseResidualBackupName(name: string, prefix: string): { epochMs: number; hrtimeNs: bigint } | null {
+function parseResidualBackupName(name: string, prefix: string): ParsedResidualBackupName | null {
   const suffix = name.slice(prefix.length);
-  const firstDash = suffix.indexOf("-");
-  if (firstDash <= 0) {
-    return null;
+  const v2Match = /^v2-(\d{13})-(\d+)-([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/.exec(suffix);
+  if (v2Match) {
+    return {
+      epochMs: Number(v2Match[1]),
+      hrtimeNs: BigInt(v2Match[2])
+    };
   }
 
-  const secondDash = suffix.indexOf("-", firstDash + 1);
-  if (secondDash <= firstDash + 1) {
-    return null;
+  const oldFormatMatch = /^(\d+)-(\d{13})-(.+)$/.exec(suffix);
+  if (oldFormatMatch) {
+    return {
+      epochMs: Number(oldFormatMatch[2]),
+      hrtimeNs: 0n
+    };
   }
 
-  const epochMsRaw = suffix.slice(0, firstDash);
-  const hrtimeRaw = suffix.slice(firstDash + 1, secondDash);
-  const uuidRaw = suffix.slice(secondDash + 1);
-
-  if (!/^\d+$/.test(epochMsRaw) || !/^\d+$/.test(hrtimeRaw) || uuidRaw.length === 0) {
-    return null;
-  }
-
-  return {
-    epochMs: Number(epochMsRaw),
-    hrtimeNs: BigInt(hrtimeRaw)
-  };
+  return null;
 }

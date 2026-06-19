@@ -30,8 +30,8 @@ describe("JsonRepository", () => {
     return new JsonRepository(path.join(tempDir, "state.json"), sampleSchema, defaultValue);
   }
 
-  function createLegacyBackupPath(filename: string, suffix: string) {
-    return `${filename}.replace-backup-${suffix}`;
+  function createOldFormatBackupPath(filename: string, pid: number, epochMs: number, suffix: string) {
+    return `${filename}.replace-backup-${pid}-${epochMs}-${suffix}`;
   }
 
   function createNewBackupPath(
@@ -40,7 +40,11 @@ describe("JsonRepository", () => {
     hrtimeNs: bigint,
     suffix = "00000000-0000-4000-8000-000000000000"
   ) {
-    return `${filename}.replace-backup-${epochMs}-${hrtimeNs}-${suffix}`;
+    return `${filename}.replace-backup-v2-${epochMs}-${hrtimeNs}-${suffix}`;
+  }
+
+  function createUnknownBackupPath(filename: string, suffix: string) {
+    return `${filename}.replace-backup-${suffix}`;
   }
 
   it("persists writes and reads them back from disk", async () => {
@@ -106,8 +110,8 @@ describe("JsonRepository", () => {
   it("recovers from a missing target using the latest valid backup on read", async () => {
     const repo = await createRepo();
     const filename = path.join(tempDir, "state.json");
-    const olderBackup = createLegacyBackupPath(filename, "2026-06-19T10-00-00-000Z");
-    const newerBackup = createLegacyBackupPath(filename, "2026-06-19T10-00-01-000Z");
+    const olderBackup = createOldFormatBackupPath(filename, 1_234, 1_718_791_200_000, "older");
+    const newerBackup = createOldFormatBackupPath(filename, 1_234, 1_718_791_201_000, "newer");
 
     await writeFile(olderBackup, JSON.stringify({ version: 1, nested: { label: "older" } }), "utf8");
     await writeFile(newerBackup, JSON.stringify({ version: 2, nested: { label: "newer" } }), "utf8");
@@ -126,8 +130,8 @@ describe("JsonRepository", () => {
   it("recovers from a missing target using the latest valid backup even if a newer backup is invalid", async () => {
     const repo = await createRepo();
     const filename = path.join(tempDir, "state.json");
-    const validBackup = createLegacyBackupPath(filename, "2026-06-19T10-00-00-000Z");
-    const invalidBackup = createLegacyBackupPath(filename, "2026-06-19T10-00-01-000Z");
+    const validBackup = createOldFormatBackupPath(filename, 1_234, 1_718_791_200_000, "valid");
+    const invalidBackup = createOldFormatBackupPath(filename, 1_234, 1_718_791_201_000, "invalid");
 
     await writeFile(validBackup, JSON.stringify({ version: 3, nested: { label: "valid" } }), "utf8");
     await writeFile(invalidBackup, "{bad json", "utf8");
@@ -146,7 +150,7 @@ describe("JsonRepository", () => {
   it("throws and preserves evidence when target is missing and no valid backup can recover it", async () => {
     const repo = await createRepo();
     const filename = path.join(tempDir, "state.json");
-    const invalidBackup = createLegacyBackupPath(filename, "2026-06-19T10-00-01-000Z");
+    const invalidBackup = createUnknownBackupPath(filename, "2026-06-19T10-00-01-000Z");
 
     await writeFile(invalidBackup, "{bad json", "utf8");
 
@@ -155,7 +159,24 @@ describe("JsonRepository", () => {
     await expect(readFile(invalidBackup, "utf8")).resolves.toBe("{bad json");
   });
 
-  it("restores the newest new-format backup deterministically even when mtimes match", async () => {
+  it("restores the newest old-format backup by embedded timestamp instead of pid order", async () => {
+    const repo = await createRepo();
+    const filename = path.join(tempDir, "state.json");
+    const sharedMtime = new Date("2026-06-19T10:00:00.000Z");
+    const olderBackup = createOldFormatBackupPath(filename, 9_000, 1_718_791_200_000, "older");
+    const newerBackup = createOldFormatBackupPath(filename, 1_000, 1_718_791_201_000, "newer");
+
+    await writeFile(olderBackup, JSON.stringify({ version: 1, nested: { label: "older" } }), "utf8");
+    await writeFile(newerBackup, JSON.stringify({ version: 2, nested: { label: "newer" } }), "utf8");
+    await Promise.all([utimes(olderBackup, sharedMtime, sharedMtime), utimes(newerBackup, sharedMtime, sharedMtime)]);
+
+    await expect(repo.read()).resolves.toEqual({
+      version: 2,
+      nested: { label: "newer" }
+    });
+  });
+
+  it("restores the newest v2 backup deterministically even when mtimes match", async () => {
     const repo = await createRepo();
     const filename = path.join(tempDir, "state.json");
     const sharedMtime = new Date("2026-06-19T10:00:00.000Z");
@@ -182,16 +203,17 @@ describe("JsonRepository", () => {
     });
   });
 
-  it("falls back to legacy backup ordering when the backup name cannot be parsed", async () => {
+  it("falls back to mtime ordering when the backup name format is unknown", async () => {
     const repo = await createRepo();
     const filename = path.join(tempDir, "state.json");
-    const sharedMtime = new Date("2026-06-19T10:00:00.000Z");
-    const olderBackup = createLegacyBackupPath(filename, "legacy-a");
-    const newerBackup = createLegacyBackupPath(filename, "legacy-z");
+    const olderBackup = createUnknownBackupPath(filename, "legacy-z");
+    const newerBackup = createUnknownBackupPath(filename, "legacy-a");
+    const olderMtime = new Date("2026-06-19T10:00:00.000Z");
+    const newerMtime = new Date("2026-06-19T10:00:01.000Z");
 
     await writeFile(olderBackup, JSON.stringify({ version: 4, nested: { label: "older" } }), "utf8");
     await writeFile(newerBackup, JSON.stringify({ version: 5, nested: { label: "newer" } }), "utf8");
-    await Promise.all([utimes(olderBackup, sharedMtime, sharedMtime), utimes(newerBackup, sharedMtime, sharedMtime)]);
+    await Promise.all([utimes(olderBackup, olderMtime, olderMtime), utimes(newerBackup, newerMtime, newerMtime)]);
 
     await expect(repo.read()).resolves.toEqual({
       version: 5,
@@ -509,7 +531,7 @@ describe("JsonRepository", () => {
   it("cleans residual backups when the current target is already valid", async () => {
     const repo = await createRepo();
     const filename = path.join(tempDir, "state.json");
-    const staleBackup = createLegacyBackupPath(filename, "2026-06-19T10-00-00-000Z");
+    const staleBackup = createOldFormatBackupPath(filename, 1_234, 1_718_791_200_000, "stale");
 
     await writeFile(filename, JSON.stringify({ version: 5, nested: { label: "stable" } }), "utf8");
     await writeFile(staleBackup, JSON.stringify({ version: 4, nested: { label: "older" } }), "utf8");
