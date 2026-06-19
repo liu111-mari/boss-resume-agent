@@ -1,7 +1,27 @@
-import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { ZodType } from "zod";
+
+type FileOps = {
+  mkdir: typeof mkdir;
+  readFile: typeof readFile;
+  rename: typeof rename;
+  rm: typeof rm;
+  stat: typeof stat;
+  writeFile: typeof writeFile;
+};
+
+const defaultFileOps: FileOps = {
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  stat,
+  writeFile
+};
+
+const fileOperationQueues = new Map<string, Promise<unknown>>();
 
 function deepClone<T>(value: T): T {
   return structuredClone(value);
@@ -11,50 +31,49 @@ function createSafeTimestamp(): string {
   return new Date().toISOString().replace(/[:.]/g, "-");
 }
 
-async function ensureParentDirectory(filename: string): Promise<void> {
-  await mkdir(path.dirname(filename), { recursive: true });
+async function ensureParentDirectory(filename: string, fileOps: FileOps): Promise<void> {
+  await fileOps.mkdir(path.dirname(filename), { recursive: true });
 }
 
 export class JsonRepository<T> {
   private readonly defaultValue: T;
-  private writeChain: Promise<void> = Promise.resolve();
+  private readonly resolvedFilename: string;
 
   constructor(
     private readonly filename: string,
     private readonly schema: ZodType<T>,
-    defaultValue: T
+    defaultValue: T,
+    private readonly fileOps: FileOps = defaultFileOps
   ) {
     this.defaultValue = deepClone(this.schema.parse(defaultValue));
+    this.resolvedFilename = path.resolve(filename);
   }
 
   async read(): Promise<T> {
-    await ensureParentDirectory(this.filename);
+    return this.enqueue(async () => {
+      await ensureParentDirectory(this.filename, this.fileOps);
 
-    let content: string;
-    try {
-      content = await readFile(this.filename, "utf8");
-    } catch (error) {
-      if (isMissingFileError(error)) {
-        return deepClone(this.defaultValue);
+      let content: string;
+      try {
+        content = await this.fileOps.readFile(this.filename, "utf8");
+      } catch (error) {
+        if (isMissingFileError(error)) {
+          return deepClone(this.defaultValue);
+        }
+        throw error;
       }
-      throw error;
-    }
 
-    try {
-      return deepClone(this.schema.parse(JSON.parse(content) as unknown));
-    } catch (error) {
-      await this.backupCorruptFile();
-      throw new Error(`配置文件损坏：${this.filename}`, { cause: error });
-    }
+      try {
+        return deepClone(this.schema.parse(JSON.parse(content) as unknown));
+      } catch (error) {
+        await this.backupCorruptFile();
+        throw new Error(`配置文件损坏：${this.filename}`, { cause: error });
+      }
+    });
   }
 
   async write(value: T): Promise<T> {
-    const operation = this.writeChain.then(() => this.performWrite(value));
-    this.writeChain = operation.then(
-      () => undefined,
-      () => undefined
-    );
-    return operation;
+    return this.enqueue(() => this.performWrite(value));
   }
 
   private async performWrite(value: T): Promise<T> {
@@ -66,13 +85,13 @@ export class JsonRepository<T> {
       `${path.basename(this.filename)}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
     );
 
-    await ensureParentDirectory(this.filename);
-    await writeFile(tempFilename, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
+    await ensureParentDirectory(this.filename, this.fileOps);
+    await this.fileOps.writeFile(tempFilename, `${JSON.stringify(parsed, null, 2)}\n`, "utf8");
 
     try {
-      await replaceFileSafely(tempFilename, this.filename);
+      await this.replaceFileSafely(tempFilename, this.filename);
     } catch (error) {
-      await rm(tempFilename, { force: true }).catch(() => undefined);
+      await this.fileOps.rm(tempFilename, { force: true }).catch(() => undefined);
       throw error;
     }
 
@@ -81,43 +100,63 @@ export class JsonRepository<T> {
 
   private async backupCorruptFile(): Promise<void> {
     const corruptFilename = `${this.filename}.corrupt-${createSafeTimestamp()}`;
-    await rename(this.filename, corruptFilename);
+    await this.fileOps.rename(this.filename, corruptFilename);
   }
-}
 
-async function replaceFileSafely(source: string, target: string): Promise<void> {
-  try {
-    if (process.platform !== "win32") {
-      await rename(source, target);
+  private enqueue<R>(operation: () => Promise<R>): Promise<R> {
+    const previous = fileOperationQueues.get(this.resolvedFilename) ?? Promise.resolve();
+    const next = previous.then(operation, operation);
+    fileOperationQueues.set(
+      this.resolvedFilename,
+      next.then(
+        () => undefined,
+        () => undefined
+      )
+    );
+    return next;
+  }
+
+  private async replaceFileSafely(source: string, target: string): Promise<void> {
+    const targetExists = await this.fileOps
+      .stat(target)
+      .then(() => true)
+      .catch((error: unknown) => {
+        if (isMissingFileError(error)) return false;
+        throw error;
+      });
+
+    if (!targetExists) {
+      await this.fileOps.rename(source, target);
       return;
     }
 
-    await readFile(target);
-  } catch (error) {
-    if (isMissingFileError(error)) {
-      await rename(source, target);
+    if (process.platform !== "win32") {
+      await this.fileOps.rm(target, { force: true });
+      await this.fileOps.rename(source, target);
       return;
     }
 
-    if (process.platform !== "win32") {
+    const backup = `${target}.replace-backup-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    await this.fileOps.rename(target, backup);
+
+    try {
+      await this.fileOps.rename(source, target);
+    } catch (error) {
+      await this.restoreBackup(backup, target);
       throw error;
     }
+
+    await this.fileOps.rm(backup, { force: true });
   }
 
-  const backup = `${target}.replace-backup-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-  await copyFile(target, backup);
-
-  try {
-    await copyFile(source, target);
-    await rm(source, { force: true });
-    await rm(backup, { force: true });
-  } catch (error) {
-    await copyFile(backup, target).catch(() => undefined);
-    await rm(source, { force: true }).catch(() => undefined);
-    throw error;
-  } finally {
-    await rm(backup, { force: true }).catch(() => undefined);
+  private async restoreBackup(backup: string, target: string): Promise<void> {
+    try {
+      await this.fileOps.rename(backup, target);
+    } catch (restoreError) {
+      await this.fileOps.rm(target, { force: true }).catch(() => undefined);
+      await this.fileOps.rename(backup, target).catch(() => undefined);
+      throw restoreError;
+    }
   }
 }
 

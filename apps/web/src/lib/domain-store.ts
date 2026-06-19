@@ -40,6 +40,7 @@ const dailyUsageSchema = z.object({
 
 const runLogListSchema = z.array(runLogEntrySchema);
 const dailyUsageListSchema = z.array(dailyUsageSchema);
+const baseDirMutationQueues = new Map<string, Promise<unknown>>();
 
 const defaultTemplate = greetingTemplateSchema.parse({
   body: "您好，我是{{school}}{{major}}专业学生，关注到{{jobTitle}}岗位，期待进一步沟通。",
@@ -58,8 +59,8 @@ const taskTransitionMap: Record<GreetingTaskStatus, readonly GreetingTaskStatus[
   scored: ["generated", "rejected", "failed"],
   generated: ["pending_review", "failed"],
   pending_review: ["approved", "rejected"],
-  approved: ["sending", "rejected"],
-  sending: ["sent", "failed", "paused"],
+  approved: ["sending", "rejected", "quota_blocked"],
+  sending: ["sent", "failed", "paused", "quota_blocked"],
   paused: ["approved", "rejected"],
   quota_blocked: ["approved", "rejected"],
   sent: [],
@@ -80,26 +81,35 @@ export class DomainTransitionError extends Error {
   }
 }
 
+export class DomainEntityNotFoundError extends Error {
+  constructor(
+    public readonly entityType: "task",
+    public readonly entityId: string
+  ) {
+    super(`${entityType} not found: ${entityId}`);
+    this.name = "DomainEntityNotFoundError";
+  }
+}
+
 export function createDomainStore(
   baseDir = process.env.BOSS_AGENT_DATA_DIR ?? path.join(process.cwd(), ".boss-agent-data")
 ) {
+  const resolvedBaseDir = path.resolve(baseDir);
   const repositories = {
-    config: new JsonRepository(path.join(baseDir, "config.json"), filterConfigSchema, filterConfigSchema.parse({})),
-    profile: new JsonRepository(path.join(baseDir, "profile.json"), profileSchema, profileSchema.parse({})),
-    template: new JsonRepository(path.join(baseDir, "template.json"), greetingTemplateSchema, defaultTemplate),
-    jobs: new JsonRepository(path.join(baseDir, "jobs.json"), z.array(jobCardSchema), []),
-    tasks: new JsonRepository(path.join(baseDir, "tasks.json"), z.array(greetingTaskSchema), []),
-    runLogs: new JsonRepository(path.join(baseDir, "run-logs.json"), runLogListSchema, []),
-    dailyUsage: new JsonRepository(path.join(baseDir, "daily-usage.json"), dailyUsageListSchema, [])
+    config: new JsonRepository(path.join(resolvedBaseDir, "config.json"), filterConfigSchema, filterConfigSchema.parse({})),
+    profile: new JsonRepository(path.join(resolvedBaseDir, "profile.json"), profileSchema, profileSchema.parse({})),
+    template: new JsonRepository(path.join(resolvedBaseDir, "template.json"), greetingTemplateSchema, defaultTemplate),
+    jobs: new JsonRepository(path.join(resolvedBaseDir, "jobs.json"), z.array(jobCardSchema), []),
+    tasks: new JsonRepository(path.join(resolvedBaseDir, "tasks.json"), z.array(greetingTaskSchema), []),
+    runLogs: new JsonRepository(path.join(resolvedBaseDir, "run-logs.json"), runLogListSchema, []),
+    dailyUsage: new JsonRepository(path.join(resolvedBaseDir, "daily-usage.json"), dailyUsageListSchema, [])
   };
 
-  const mutationChains = new Map<string, Promise<unknown>>();
-
-  function queueMutation<T>(key: string, mutate: () => Promise<T>): Promise<T> {
-    const previous = mutationChains.get(key) ?? Promise.resolve();
+  function queueMutation<T>(_key: string, mutate: () => Promise<T>): Promise<T> {
+    const previous = baseDirMutationQueues.get(resolvedBaseDir) ?? Promise.resolve();
     const operation = previous.then(mutate, mutate);
-    mutationChains.set(
-      key,
+    baseDirMutationQueues.set(
+      resolvedBaseDir,
       operation.then(
         () => undefined,
         () => undefined
@@ -206,7 +216,7 @@ export function createDomainStore(
       const tasks = await repositories.tasks.read();
       const index = tasks.findIndex((task) => task.id === taskId);
       if (index < 0) {
-        throw new Error(`Task not found: ${taskId}`);
+        throw new DomainEntityNotFoundError("task", taskId);
       }
 
       const current = tasks[index];
@@ -233,15 +243,11 @@ export function createDomainStore(
   }
 
   async function approveTasks(taskIds: string[]): Promise<GreetingTask[]> {
-    const updated = await Promise.all(taskIds.map((taskId) => transitionTask(taskId, "approved")));
-    return updated;
+    return mutateTasksAtomically(taskIds, "approved");
   }
 
   async function rejectTasks(taskIds: string[], failureReason = ""): Promise<GreetingTask[]> {
-    const updated = await Promise.all(
-      taskIds.map((taskId) => transitionTask(taskId, "rejected", { failureReason }))
-    );
-    return updated;
+    return mutateTasksAtomically(taskIds, "rejected", { failureReason });
   }
 
   async function getApprovedTasks(): Promise<GreetingTask[]> {
@@ -310,6 +316,51 @@ export function createDomainStore(
     appendRunLog,
     getRunLogs
   };
+
+  async function mutateTasksAtomically(
+    taskIds: string[],
+    to: GreetingTaskStatus,
+    metadata: Partial<Omit<GreetingTask, "id" | "createdAt" | "updatedAt" | "status">> = {}
+  ): Promise<GreetingTask[]> {
+    return queueMutation("tasks", async () => {
+      const tasks = await repositories.tasks.read();
+      const uniqueTaskIds = Array.from(new Set(taskIds));
+      const validated = uniqueTaskIds.map((taskId) => {
+        const index = tasks.findIndex((task) => task.id === taskId);
+        if (index < 0) {
+          throw new DomainEntityNotFoundError("task", taskId);
+        }
+
+        const current = tasks[index];
+        const allowed = taskTransitionMap[current.status];
+        if (!allowed.includes(to)) {
+          throw new DomainTransitionError(current.status, to);
+        }
+
+        const next = greetingTaskSchema.parse({
+          ...current,
+          ...metadata,
+          status: to,
+          updatedAt: new Date().toISOString()
+        });
+
+        return { index, current, next };
+      });
+
+      const changed = validated.filter(({ current, next }) => hasTaskChanged(current, next));
+      if (changed.length === 0) {
+        return validated.map(({ current }) => current);
+      }
+
+      const nextTasks = tasks.slice();
+      for (const { index, next } of changed) {
+        nextTasks[index] = next;
+      }
+
+      await repositories.tasks.write(nextTasks);
+      return validated.map(({ current, next }) => (hasTaskChanged(current, next) ? next : current));
+    });
+  }
 }
 
 function createDefaultDailyUsage(date: string): DailyUsage {

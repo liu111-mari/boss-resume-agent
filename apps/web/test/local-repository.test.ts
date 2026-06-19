@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
@@ -120,5 +120,110 @@ describe("JsonRepository", () => {
       nested: { label: "recovered" }
     });
     expect(await readFile(filename, "utf8")).not.toBe(initialBytes);
+  });
+
+  it("shares one queue across repository instances for the same file so reads do not observe replacement gaps", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "boss-agent-local-repository-"));
+    const filename = path.join(tempDir, "state.json");
+    await writeFile(filename, JSON.stringify({ version: 0, nested: { label: "initial" } }), "utf8");
+
+    let allowSecondRename!: () => void;
+    const secondRenameStarted = new Promise<void>((resolve) => {
+      allowSecondRename = resolve;
+    });
+
+    const releaseSecondRename = new Promise<void>((resolve) => {
+      secondRenameStarted.then(resolve);
+    });
+
+    const delayedFileOps = {
+      mkdir,
+      readFile,
+      writeFile,
+      rm,
+      stat,
+      async rename(source: Parameters<typeof rename>[0], target: Parameters<typeof rename>[1]) {
+        const sourcePath = String(source);
+        const targetPath = String(target);
+        const basename = path.basename(sourcePath);
+        if (basename.includes(".tmp-") && path.basename(targetPath) === "state.json") {
+          await releaseSecondRename;
+        }
+        return rename(source, target);
+      }
+    };
+
+    const writer = new JsonRepository(filename, sampleSchema, { version: 0, nested: { label: "default" } }, delayedFileOps);
+    const reader = new JsonRepository(filename, sampleSchema, { version: 0, nested: { label: "default" } }, delayedFileOps);
+
+    const writePromise = writer.write({ version: 1, nested: { label: "updated" } });
+    const readPromise = reader.read();
+
+    allowSecondRename();
+
+    await expect(readPromise).resolves.toEqual({
+      version: 1,
+      nested: { label: "updated" }
+    });
+    await expect(writePromise).resolves.toEqual({
+      version: 1,
+      nested: { label: "updated" }
+    });
+
+    const files = await readdir(tempDir);
+    expect(files.filter((file) => file.includes(".corrupt-"))).toEqual([]);
+  });
+
+  it("keeps the shared filename queue usable after a failed operation from another instance", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "boss-agent-local-repository-"));
+    const filename = path.join(tempDir, "state.json");
+    const first = new JsonRepository(filename, sampleSchema, { version: 0, nested: { label: "default" } });
+    const second = new JsonRepository(filename, sampleSchema, { version: 0, nested: { label: "default" } });
+
+    await first.write({ version: 1, nested: { label: "good" } });
+    await expect(first.write({ version: -1, nested: { label: "bad" } })).rejects.toThrow();
+
+    await second.write({ version: 2, nested: { label: "recovered" } });
+
+    await expect(second.read()).resolves.toEqual({
+      version: 2,
+      nested: { label: "recovered" }
+    });
+    await expect(first.read()).resolves.toEqual({
+      version: 2,
+      nested: { label: "recovered" }
+    });
+  });
+
+  it("restores the original target if replacement fails after target was moved to backup", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "boss-agent-local-repository-"));
+    const filename = path.join(tempDir, "state.json");
+    await writeFile(filename, JSON.stringify({ version: 1, nested: { label: "stable" } }), "utf8");
+
+    let renameCallCount = 0;
+    const injectedOps = {
+      mkdir,
+      readFile,
+      writeFile,
+      rm,
+      stat,
+      async rename(source: Parameters<typeof rename>[0], target: Parameters<typeof rename>[1]) {
+        renameCallCount += 1;
+        if (renameCallCount === 2) {
+          throw new Error("rename temp -> target failed");
+        }
+        return rename(source, target);
+      }
+    };
+
+    const repo = new JsonRepository(filename, sampleSchema, { version: 0, nested: { label: "default" } }, injectedOps);
+
+    await expect(repo.write({ version: 2, nested: { label: "new" } })).rejects.toThrow("rename temp -> target failed");
+
+    await expect(readFile(filename, "utf8")).resolves.toContain('"label":"stable"');
+    await expect(repo.read()).resolves.toEqual({
+      version: 1,
+      nested: { label: "stable" }
+    });
   });
 });

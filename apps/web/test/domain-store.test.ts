@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { GreetingTask, JobCard } from "@boss-agent/shared";
-import { createDomainStore, DomainTransitionError } from "@/lib/domain-store";
+import { createDomainStore, DomainEntityNotFoundError, DomainTransitionError } from "@/lib/domain-store";
 
 function createJob(overrides: Partial<JobCard> = {}): JobCard {
   return {
@@ -177,6 +177,29 @@ describe("domain store", () => {
     await expect(store.transitionTask("task-1", "approved")).rejects.toBeInstanceOf(DomainTransitionError);
   });
 
+  it("allows quota_blocked transitions from approved and sending before returning to approved", async () => {
+    const store = await makeStore();
+    await store.createOrUpdateTask(createTask({ id: "task-approved", status: "pending_review" }));
+    await store.approveTasks(["task-approved"]);
+    await store.transitionTask("task-approved", "quota_blocked");
+    await store.transitionTask("task-approved", "approved");
+    await store.transitionTask("task-approved", "sending");
+    await store.transitionTask("task-approved", "quota_blocked");
+
+    await expect(store.getTasks()).resolves.toEqual([
+      expect.objectContaining({ id: "task-approved", status: "quota_blocked" })
+    ]);
+  });
+
+  it("throws DomainEntityNotFoundError when transitioning a missing task", async () => {
+    const store = await makeStore();
+
+    await expect(store.transitionTask("missing-task", "approved")).rejects.toEqual(
+      expect.objectContaining({ entityType: "task", entityId: "missing-task" })
+    );
+    await expect(store.transitionTask("missing-task", "approved")).rejects.toBeInstanceOf(DomainEntityNotFoundError);
+  });
+
   it("approveTasks and rejectTasks reuse transitions and getApprovedTasks filters correctly", async () => {
     const store = await makeStore();
     await store.createOrUpdateTask(createTask({ id: "task-approved", status: "pending_review" }));
@@ -193,6 +216,34 @@ describe("domain store", () => {
         expect.objectContaining({ id: "task-rejected", status: "rejected", failureReason: "人工驳回" })
       ])
     );
+  });
+
+  it("approveTasks is atomic and rolls back the whole batch when any transition is invalid", async () => {
+    const store = await makeStore();
+    await store.createOrUpdateTask(createTask({ id: "task-ok", status: "pending_review" }));
+    await store.createOrUpdateTask(createTask({ id: "task-bad", status: "collected" }));
+
+    await expect(store.approveTasks(["task-ok", "task-bad"])).rejects.toBeInstanceOf(DomainTransitionError);
+
+    await expect(store.getTasks()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "task-ok", status: "pending_review" }),
+        expect.objectContaining({ id: "task-bad", status: "collected" })
+      ])
+    );
+  });
+
+  it("rejectTasks is atomic and rolls back the whole batch when any task is missing", async () => {
+    const store = await makeStore();
+    await store.createOrUpdateTask(createTask({ id: "task-ok", status: "pending_review" }));
+
+    await expect(store.rejectTasks(["task-ok", "missing-task"], "人工驳回")).rejects.toBeInstanceOf(
+      DomainEntityNotFoundError
+    );
+
+    await expect(store.getTasks()).resolves.toEqual([
+      expect.objectContaining({ id: "task-ok", status: "pending_review", failureReason: "" })
+    ]);
   });
 
   it("updates updatedAt only when task state or metadata actually changes", async () => {
@@ -224,6 +275,27 @@ describe("domain store", () => {
     ]);
 
     await expect(store.getDailyUsage("2026-06-19")).resolves.toMatchObject({
+      date: "2026-06-19",
+      confirmedSends: 4
+    });
+  });
+
+  it("shares one mutation lock across store instances for the same baseDir", async () => {
+    const first = await makeStore();
+    const second = createDomainStore(tempDir);
+
+    await Promise.all([
+      first.incrementConfirmedSend("2026-06-19"),
+      second.incrementConfirmedSend("2026-06-19"),
+      first.incrementConfirmedSend("2026-06-19"),
+      second.incrementConfirmedSend("2026-06-19")
+    ]);
+
+    await expect(first.getDailyUsage("2026-06-19")).resolves.toMatchObject({
+      date: "2026-06-19",
+      confirmedSends: 4
+    });
+    await expect(second.getDailyUsage("2026-06-19")).resolves.toMatchObject({
       date: "2026-06-19",
       confirmedSends: 4
     });
