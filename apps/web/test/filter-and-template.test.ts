@@ -272,6 +272,57 @@ describe("evaluateJob", () => {
       reasons: ["薪资未识别"]
     });
   });
+
+  it("matches target titles and required keywords case-insensitively", () => {
+    const result = evaluateJob(
+      createJob({
+        title: "AI Product Intern",
+        jdText: "Built pipelines and RAG evaluation workflows"
+      }),
+      createFilterConfig({
+        targetTitles: ["ai product"],
+        requiredKeywords: ["rag"]
+      })
+    );
+
+    expect(result).toEqual({
+      accepted: true,
+      reasons: []
+    });
+  });
+
+  it("matches blocked companies and excluded keywords case-insensitively", () => {
+    expect(
+      evaluateJob(
+        createJob({
+          company: "Acme SALES Group",
+          title: "Data Analyst",
+          jdText: "Focus on analytics"
+        }),
+        createFilterConfig({
+          blockedCompanies: ["sales"]
+        })
+      )
+    ).toEqual({
+      accepted: false,
+      reasons: ["命中屏蔽公司：sales"]
+    });
+
+    expect(
+      evaluateJob(
+        createJob({
+          title: "Data Analyst",
+          jdText: "Need SALES enablement support"
+        }),
+        createFilterConfig({
+          excludedKeywords: ["sales"]
+        })
+      )
+    ).toEqual({
+      accepted: false,
+      reasons: ["命中排除关键词：sales"]
+    });
+  });
 });
 
 describe("selectProfileItems", () => {
@@ -333,6 +384,39 @@ describe("selectProfileItems", () => {
 
     expect(result.skills.map((item) => item.id)).toEqual(["skill-sql"]);
     expect(result.projects.map((item) => item.id)).toEqual(["project-sql", "project-analysis"]);
+  });
+
+  it("selects items when only content matches keywords case-insensitively", () => {
+    const profile: Profile = {
+      school: "",
+      major: "",
+      graduation: "",
+      direction: "",
+      items: [
+        {
+          id: "skill-rag",
+          category: "skill",
+          content: "Built RAG workflow",
+          tags: [],
+          enabled: true
+        },
+        {
+          id: "skill-other",
+          category: "skill",
+          content: "Built dashboard",
+          tags: [],
+          enabled: true
+        }
+      ]
+    };
+
+    const result = selectProfileItems(profile, ["rag"], {
+      maxSkills: 2,
+      maxProjects: 1
+    });
+
+    expect(result.skills.map((item) => item.id)).toEqual(["skill-rag"]);
+    expect(result.projects).toEqual([]);
   });
 });
 
