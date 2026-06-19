@@ -110,8 +110,8 @@ export function createDomainStore(
   function queueMutation<T>(_key: string, mutate: () => Promise<T>): Promise<T> {
     const previous = baseDirMutationQueues.get(resolvedBaseDir) ?? Promise.resolve();
     const operation = previous.then(
-      () => withFilesystemLock(mutationLockPath, mutate),
-      () => withFilesystemLock(mutationLockPath, mutate)
+      () => withFilesystemLock(resolvedBaseDir, mutate, { lockType: "directory" }),
+      () => withFilesystemLock(resolvedBaseDir, mutate, { lockType: "directory" })
     );
     baseDirMutationQueues.set(
       resolvedBaseDir,

@@ -140,6 +140,7 @@ describe("JsonRepository", () => {
     const delayedFileOps = {
       mkdir,
       readFile,
+      readdir,
       writeFile,
       rm,
       stat,
@@ -205,6 +206,7 @@ describe("JsonRepository", () => {
     const injectedOps = {
       mkdir,
       readFile,
+      readdir,
       writeFile,
       rm,
       stat,
@@ -238,6 +240,7 @@ describe("JsonRepository", () => {
     const recordingOps = {
       mkdir,
       readFile,
+      readdir,
       writeFile,
       stat,
       async rename(source: Parameters<typeof rename>[0], target: Parameters<typeof rename>[1]) {
@@ -317,6 +320,7 @@ describe("JsonRepository", () => {
     const injectedOps = {
       mkdir,
       readFile,
+      readdir,
       writeFile,
       stat,
       async rename(source: Parameters<typeof rename>[0], target: Parameters<typeof rename>[1]) {
@@ -350,5 +354,46 @@ describe("JsonRepository", () => {
 
     const files = await readdir(tempDir);
     expect(files.some((file) => file.includes(".replace-backup-"))).toBe(true);
+  });
+
+  it("cleans leftover windows backup files on the next successful locked operation", async () => {
+    tempDir = await mkdtemp(path.join(os.tmpdir(), "boss-agent-local-repository-"));
+    const filename = path.join(tempDir, "state.json");
+    await writeFile(filename, JSON.stringify({ version: 1, nested: { label: "stable" } }), "utf8");
+
+    let failBackupCleanup = true;
+    const injectedOps = {
+      mkdir,
+      readFile,
+      readdir,
+      writeFile,
+      stat,
+      async rename(source: Parameters<typeof rename>[0], target: Parameters<typeof rename>[1]) {
+        return rename(source, target);
+      },
+      async rm(target: Parameters<typeof rm>[0], options?: Parameters<typeof rm>[1]) {
+        const targetPath = String(target);
+        if (failBackupCleanup && path.basename(targetPath).includes(".replace-backup-")) {
+          throw new Error("backup cleanup failed");
+        }
+        return rm(target, options);
+      }
+    };
+
+    const repo = new JsonRepository(
+      filename,
+      sampleSchema,
+      { version: 0, nested: { label: "default" } },
+      injectedOps,
+      () => "win32"
+    );
+
+    await repo.write({ version: 2, nested: { label: "new" } });
+    expect((await readdir(tempDir)).some((file) => file.includes(".replace-backup-"))).toBe(true);
+
+    failBackupCleanup = false;
+    await repo.read();
+
+    expect((await readdir(tempDir)).some((file) => file.includes(".replace-backup-"))).toBe(false);
   });
 });

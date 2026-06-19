@@ -1,7 +1,28 @@
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { ZodType } from "zod";
-import { defaultFileOps, type FileOps, withFilesystemLock } from "@/lib/filesystem-lock";
+import { withFilesystemLock } from "@/lib/filesystem-lock";
+
+type FileOps = {
+  mkdir: typeof mkdir;
+  readFile: typeof readFile;
+  readdir: typeof readdir;
+  rename: typeof rename;
+  rm: typeof rm;
+  stat: typeof stat;
+  writeFile: typeof writeFile;
+};
+
+const defaultFileOps: FileOps = {
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  rm,
+  stat,
+  writeFile
+};
 
 const fileOperationQueues = new Map<string, Promise<unknown>>();
 
@@ -19,7 +40,6 @@ async function ensureParentDirectory(filename: string, fileOps: FileOps): Promis
 
 export class JsonRepository<T> {
   private readonly defaultValue: T;
-  private readonly lockPath: string;
   private readonly resolvedFilename: string;
 
   constructor(
@@ -31,12 +51,12 @@ export class JsonRepository<T> {
   ) {
     this.defaultValue = deepClone(this.schema.parse(defaultValue));
     this.resolvedFilename = path.resolve(filename);
-    this.lockPath = `${this.resolvedFilename}.lock`;
   }
 
   async read(): Promise<T> {
     return this.enqueue(() =>
-      withFilesystemLock(this.lockPath, async () => {
+      withFilesystemLock(this.resolvedFilename, async () => {
+        await this.cleanupResidualBackups();
         await ensureParentDirectory(this.filename, this.fileOps);
 
         let content: string;
@@ -55,12 +75,17 @@ export class JsonRepository<T> {
           await this.backupCorruptFile();
           throw new Error(`配置文件损坏：${this.filename}`, { cause: error });
         }
-      }, { fileOps: this.fileOps })
+      })
     );
   }
 
   async write(value: T): Promise<T> {
-    return this.enqueue(() => withFilesystemLock(this.lockPath, () => this.performWrite(value), { fileOps: this.fileOps }));
+    return this.enqueue(() =>
+      withFilesystemLock(this.resolvedFilename, async () => {
+        await this.cleanupResidualBackups();
+        return this.performWrite(value);
+      })
+    );
   }
 
   private async performWrite(value: T): Promise<T> {
@@ -144,8 +169,45 @@ export class JsonRepository<T> {
       throw restoreError;
     }
   }
+
+  private async cleanupResidualBackups(): Promise<void> {
+    const directory = path.dirname(this.filename);
+    const prefix = `${path.basename(this.filename)}.replace-backup-`;
+    const entries = await this.fileOps.readdir(directory).catch((error: unknown) => {
+      if (isMissingFileError(error)) {
+        return [];
+      }
+      throw error;
+    });
+
+    for (const entry of entries) {
+      if (!entry.startsWith(prefix)) {
+        continue;
+      }
+
+      const fullPath = path.join(directory, entry);
+      await this.tryRemoveResidualBackup(fullPath);
+    }
+  }
+
+  private async tryRemoveResidualBackup(fullPath: string): Promise<void> {
+    const retryDelays = [10, 25, 50];
+
+    for (let attempt = 0; attempt < retryDelays.length; attempt += 1) {
+      try {
+        await this.fileOps.rm(fullPath, { force: true });
+        return;
+      } catch {
+        await delay(retryDelays[attempt]);
+      }
+    }
+  }
 }
 
 function isMissingFileError(error: unknown): error is NodeJS.ErrnoException {
   return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
