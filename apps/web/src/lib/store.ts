@@ -103,7 +103,7 @@ export function approveTasks(taskIds: string[]): GreetingTask[] {
 export function updateTaskStatus(taskId: string, status: GreetingTask["status"], failureReason = ""): GreetingTask | undefined {
   const task = store.tasks.find((item) => item.id === taskId);
   if (!task) return undefined;
-  if (task.status !== status) {
+  if (task.status !== status || task.failureReason !== failureReason) {
     task.updatedAt = new Date().toISOString();
   }
   task.status = status;

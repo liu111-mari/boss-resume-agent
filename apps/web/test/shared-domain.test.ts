@@ -247,4 +247,49 @@ describe("greeting task store state", () => {
     expect(task.status).toBe("sending");
     expect(task.updatedAt).toBe("2026-06-19T10:45:00.000Z");
   });
+
+  it("updates updatedAt when failureReason changes without a status change", () => {
+    upsertJobs([
+      {
+        id: "job-5",
+        title: "产品运营",
+        company: "示例运营",
+        city: "北京",
+        collectedAt: "2026-06-18T08:00:00.000Z"
+      }
+    ]);
+    const [task] = createGreetingTasks(["job-5"]);
+    task.status = "failed";
+    task.failureReason = "network error";
+    task.updatedAt = "2026-06-18T08:00:00.000Z";
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-19T11:30:00.000Z"));
+
+    updateTaskStatus(task.id, "failed", "quota exceeded");
+
+    expect(task.failureReason).toBe("quota exceeded");
+    expect(task.updatedAt).toBe("2026-06-19T11:30:00.000Z");
+  });
+
+  it("preserves updatedAt when status and failureReason do not change", () => {
+    upsertJobs([
+      {
+        id: "job-6",
+        title: "AI Agent 工程师",
+        company: "示例智能",
+        city: "广州",
+        collectedAt: "2026-06-18T08:00:00.000Z"
+      }
+    ]);
+    const [task] = createGreetingTasks(["job-6"]);
+    task.status = "failed";
+    task.failureReason = "network error";
+    task.updatedAt = "2026-06-18T08:00:00.000Z";
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-19T12:00:00.000Z"));
+
+    updateTaskStatus(task.id, "failed", "network error");
+
+    expect(task.updatedAt).toBe("2026-06-18T08:00:00.000Z");
+  });
 });
