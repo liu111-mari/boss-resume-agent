@@ -72,6 +72,7 @@ export function createGreetingTasks(jobIds: string[]): GreetingTask[] {
       created.push(existing);
       continue;
     }
+    const now = new Date().toISOString();
     const task = greetingTaskSchema.parse({
       id: crypto.randomUUID(),
       jobId: job.id,
@@ -79,8 +80,9 @@ export function createGreetingTasks(jobIds: string[]): GreetingTask[] {
       company: job.company,
       detailUrl: job.detailUrl,
       messageDraft: `您好，我是信息管理与信息系统专业 2027 届本科生，关注到贵司「${job.title}」岗位，具备数据分析、AI 工具应用和产品/业务流程理解能力，希望进一步沟通实习机会。`,
-      status: "draft",
-      createdAt: new Date().toISOString()
+      status: "pending_review",
+      createdAt: now,
+      updatedAt: now
     });
     store.tasks.unshift(task);
     created.push(task);
@@ -90,7 +92,7 @@ export function createGreetingTasks(jobIds: string[]): GreetingTask[] {
 
 export function approveTasks(taskIds: string[]): GreetingTask[] {
   for (const task of store.tasks) {
-    if (taskIds.includes(task.id) && task.status === "draft") {
+    if (taskIds.includes(task.id) && task.status === "pending_review") {
       task.status = "approved";
     }
   }

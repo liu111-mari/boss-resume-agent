@@ -158,10 +158,7 @@ export type GreetingTemplate = z.infer<typeof greetingTemplateSchema>;
 export type GreetingTaskStatus = z.infer<typeof greetingTaskStatusSchema>;
 export type ParsedJD = z.infer<typeof parsedJDSchema>;
 export type ConversationLead = z.infer<typeof conversationLeadSchema>;
-type ParsedGreetingTask = z.infer<typeof greetingTaskSchema>;
-export type GreetingTask = Omit<ParsedGreetingTask, "status"> & {
-  status: GreetingTaskStatus | "draft";
-};
+export type GreetingTask = z.infer<typeof greetingTaskSchema>;
 export type ProfileAsset = z.infer<typeof profileAssetSchema>;
 export type ResumeVersion = z.infer<typeof resumeVersionSchema>;
 

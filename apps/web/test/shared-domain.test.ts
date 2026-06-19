@@ -1,11 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
   filterConfigSchema,
   greetingTaskSchema,
   greetingTemplateSchema,
-  profileSchema
+  profileSchema,
+  type GreetingTask
 } from "@boss-agent/shared";
+import {
+  approveTasks,
+  createGreetingTasks,
+  store,
+  upsertJobs
+} from "@/lib/store";
+
+// @ts-expect-error legacy draft status must not be assignable to the schema-inferred type
+const legacyDraftStatus: GreetingTask["status"] = "draft";
+void legacyDraftStatus;
 
 describe("shared greeting automation domain schemas", () => {
   it("parses the complete filter configuration", () => {
@@ -59,6 +70,21 @@ describe("shared greeting automation domain schemas", () => {
     expect(result.updatedAt).toBe("2026-06-18T08:05:00.000Z");
   });
 
+  it("rejects the legacy draft greeting task status", () => {
+    const result = greetingTaskSchema.safeParse({
+      id: "task-draft",
+      jobId: "job-draft",
+      jobTitle: "数据分析师",
+      company: "示例科技",
+      messageDraft: "你好，我对这个岗位很感兴趣。",
+      status: "draft",
+      createdAt: "2026-06-18T08:00:00.000Z",
+      updatedAt: "2026-06-18T08:00:00.000Z"
+    });
+
+    expect(result.success).toBe(false);
+  });
+
   it("applies empty defaults to a profile", () => {
     const result = profileSchema.parse({});
 
@@ -93,5 +119,57 @@ describe("shared greeting automation domain schemas", () => {
       bannedPhrases: ["海投"],
       version: 1
     });
+  });
+});
+
+describe("greeting task store state", () => {
+  beforeEach(() => {
+    store.jobs.length = 0;
+    store.conversations.length = 0;
+    store.tasks.length = 0;
+  });
+
+  it("creates pending review tasks with updatedAt", () => {
+    upsertJobs([
+      {
+        id: "job-1",
+        title: "AI 产品经理",
+        company: "示例科技",
+        city: "上海",
+        collectedAt: "2026-06-18T08:00:00.000Z"
+      }
+    ]);
+
+    const [task] = createGreetingTasks(["job-1"]);
+
+    expect(task.status).toBe("pending_review");
+    expect(task.updatedAt).toEqual(expect.any(String));
+    expect(Number.isNaN(Date.parse(task.updatedAt))).toBe(false);
+  });
+
+  it("approves only pending review tasks", () => {
+    upsertJobs([
+      {
+        id: "job-2",
+        title: "数据分析师",
+        company: "示例数据",
+        city: "杭州",
+        collectedAt: "2026-06-18T08:00:00.000Z"
+      },
+      {
+        id: "job-3",
+        title: "产品经理",
+        company: "示例产品",
+        city: "上海",
+        collectedAt: "2026-06-18T08:00:00.000Z"
+      }
+    ]);
+    const [pendingTask, failedTask] = createGreetingTasks(["job-2", "job-3"]);
+    failedTask.status = "failed";
+
+    approveTasks([pendingTask.id, failedTask.id]);
+
+    expect(pendingTask.status).toBe("approved");
+    expect(failedTask.status).toBe("failed");
   });
 });

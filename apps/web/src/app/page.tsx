@@ -330,7 +330,7 @@ export default function Home() {
                     <label>
                       <input
                         type="checkbox"
-                        disabled={task.status !== "draft"}
+                        disabled={task.status !== "pending_review"}
                         checked={selectedTaskIds.includes(task.id)}
                         onChange={(event) => {
                           setSelectedTaskIds((ids) => (event.target.checked ? [...ids, task.id] : ids.filter((id) => id !== task.id)));
