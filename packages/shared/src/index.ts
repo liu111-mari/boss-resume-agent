@@ -243,3 +243,6 @@ function pickKeywords(text: string, candidates: string[]): string[] {
   const normalized = text.toLowerCase();
   return candidates.filter((candidate) => normalized.includes(candidate.toLowerCase()));
 }
+
+export * from "./filter.js";
+export * from "./template.js";
