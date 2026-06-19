@@ -11,3 +11,4 @@ coverage
 apps/extension/dist
 .playwright-mcp
 .worktrees/
+.boss-agent-data/
