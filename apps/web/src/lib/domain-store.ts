@@ -96,7 +96,6 @@ export function createDomainStore(
   baseDir = process.env.BOSS_AGENT_DATA_DIR ?? path.join(process.cwd(), ".boss-agent-data")
 ) {
   const resolvedBaseDir = path.resolve(baseDir);
-  const mutationLockPath = `${resolvedBaseDir}.mutation.lock`;
   const repositories = {
     config: new JsonRepository(path.join(resolvedBaseDir, "config.json"), filterConfigSchema, filterConfigSchema.parse({})),
     profile: new JsonRepository(path.join(resolvedBaseDir, "profile.json"), profileSchema, profileSchema.parse({})),
@@ -110,6 +109,7 @@ export function createDomainStore(
   function queueMutation<T>(_key: string, mutate: () => Promise<T>): Promise<T> {
     const previous = baseDirMutationQueues.get(resolvedBaseDir) ?? Promise.resolve();
     const operation = previous.then(
+      // proper-lockfile locks the directory by creating `${resolvedBaseDir}.lock`.
       () => withFilesystemLock(resolvedBaseDir, mutate, { lockType: "directory" }),
       () => withFilesystemLock(resolvedBaseDir, mutate, { lockType: "directory" })
     );

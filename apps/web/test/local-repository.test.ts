@@ -30,6 +30,10 @@ describe("JsonRepository", () => {
     return new JsonRepository(path.join(tempDir, "state.json"), sampleSchema, defaultValue);
   }
 
+  function createBackupPath(filename: string, suffix: string) {
+    return `${filename}.replace-backup-${suffix}`;
+  }
+
   it("persists writes and reads them back from disk", async () => {
     const repo = await createRepo();
 
@@ -88,6 +92,58 @@ describe("JsonRepository", () => {
     const backupName = files.find((file) => /^state\.json\.corrupt-/.test(file));
     expect(backupName).toBeTruthy();
     await expect(readFile(path.join(tempDir, backupName!), "utf8")).resolves.toBe(invalidPayload);
+  });
+
+  it("recovers from a missing target using the latest valid backup on read", async () => {
+    const repo = await createRepo();
+    const filename = path.join(tempDir, "state.json");
+    const olderBackup = createBackupPath(filename, "2026-06-19T10-00-00-000Z");
+    const newerBackup = createBackupPath(filename, "2026-06-19T10-00-01-000Z");
+
+    await writeFile(olderBackup, JSON.stringify({ version: 1, nested: { label: "older" } }), "utf8");
+    await writeFile(newerBackup, JSON.stringify({ version: 2, nested: { label: "newer" } }), "utf8");
+
+    await expect(repo.read()).resolves.toEqual({
+      version: 2,
+      nested: { label: "newer" }
+    });
+    await expect(readFile(filename, "utf8").then((content) => JSON.parse(content))).resolves.toEqual({
+      version: 2,
+      nested: { label: "newer" }
+    });
+    expect((await readdir(tempDir)).some((file) => file.includes(".replace-backup-"))).toBe(false);
+  });
+
+  it("recovers from a missing target using the latest valid backup even if a newer backup is invalid", async () => {
+    const repo = await createRepo();
+    const filename = path.join(tempDir, "state.json");
+    const validBackup = createBackupPath(filename, "2026-06-19T10-00-00-000Z");
+    const invalidBackup = createBackupPath(filename, "2026-06-19T10-00-01-000Z");
+
+    await writeFile(validBackup, JSON.stringify({ version: 3, nested: { label: "valid" } }), "utf8");
+    await writeFile(invalidBackup, "{bad json", "utf8");
+
+    await expect(repo.read()).resolves.toEqual({
+      version: 3,
+      nested: { label: "valid" }
+    });
+    await expect(readFile(filename, "utf8").then((content) => JSON.parse(content))).resolves.toEqual({
+      version: 3,
+      nested: { label: "valid" }
+    });
+    expect((await readdir(tempDir)).some((file) => file.includes(".replace-backup-"))).toBe(false);
+  });
+
+  it("throws and preserves evidence when target is missing and no valid backup can recover it", async () => {
+    const repo = await createRepo();
+    const filename = path.join(tempDir, "state.json");
+    const invalidBackup = createBackupPath(filename, "2026-06-19T10-00-01-000Z");
+
+    await writeFile(invalidBackup, "{bad json", "utf8");
+
+    await expect(repo.read()).rejects.toThrow("配置文件损坏");
+    expect(await readdir(tempDir)).toContain(path.basename(invalidBackup));
+    await expect(readFile(invalidBackup, "utf8")).resolves.toBe("{bad json");
   });
 
   it("serializes concurrent writes so the last call wins", async () => {
@@ -394,6 +450,21 @@ describe("JsonRepository", () => {
     failBackupCleanup = false;
     await repo.read();
 
+    expect((await readdir(tempDir)).some((file) => file.includes(".replace-backup-"))).toBe(false);
+  });
+
+  it("cleans residual backups when the current target is already valid", async () => {
+    const repo = await createRepo();
+    const filename = path.join(tempDir, "state.json");
+    const staleBackup = createBackupPath(filename, "2026-06-19T10-00-00-000Z");
+
+    await writeFile(filename, JSON.stringify({ version: 5, nested: { label: "stable" } }), "utf8");
+    await writeFile(staleBackup, JSON.stringify({ version: 4, nested: { label: "older" } }), "utf8");
+
+    await expect(repo.read()).resolves.toEqual({
+      version: 5,
+      nested: { label: "stable" }
+    });
     expect((await readdir(tempDir)).some((file) => file.includes(".replace-backup-"))).toBe(false);
   });
 });

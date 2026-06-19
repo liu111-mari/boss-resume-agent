@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -299,6 +300,43 @@ describe("domain store", () => {
       date: "2026-06-19",
       confirmedSends: 4
     });
+  });
+
+  it("waits for an external process holding the baseDir proper-lockfile lock before mutating usage", async () => {
+    const store = await makeStore();
+    const lockPath = `${tempDir}.lock`;
+    const workerPath = path.join(process.cwd(), "apps/web/test/helpers/fs-lock-worker.mjs");
+    const worker = spawn(process.execPath, [workerPath, lockPath, "250"], {
+      cwd: process.cwd(),
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    const workerReady = new Promise<void>((resolve, reject) => {
+      worker.stdout.setEncoding("utf8");
+      worker.stdout.on("data", (chunk) => {
+        if (chunk.includes("locked")) resolve();
+      });
+      worker.once("error", reject);
+      worker.once("exit", (code) => {
+        if (code !== 0) reject(new Error(`lock worker exited with code ${code}`));
+      });
+    });
+
+    try {
+      await workerReady;
+
+      const startedAt = Date.now();
+      await store.incrementConfirmedSend("2026-06-19");
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(elapsedMs).toBeGreaterThanOrEqual(150);
+      await expect(store.getDailyUsage("2026-06-19")).resolves.toMatchObject({
+        date: "2026-06-19",
+        confirmedSends: 1
+      });
+    } finally {
+      worker.kill();
+    }
   });
 
   it("persists run logs across store reconstruction", async () => {

@@ -56,7 +56,7 @@ export class JsonRepository<T> {
   async read(): Promise<T> {
     return this.enqueue(() =>
       withFilesystemLock(this.resolvedFilename, async () => {
-        await this.cleanupResidualBackups();
+        await this.recoverOrCleanupResidualBackups();
         await ensureParentDirectory(this.filename, this.fileOps);
 
         let content: string;
@@ -82,7 +82,7 @@ export class JsonRepository<T> {
   async write(value: T): Promise<T> {
     return this.enqueue(() =>
       withFilesystemLock(this.resolvedFilename, async () => {
-        await this.cleanupResidualBackups();
+        await this.recoverOrCleanupResidualBackups();
         return this.performWrite(value);
       })
     );
@@ -170,8 +170,39 @@ export class JsonRepository<T> {
     }
   }
 
-  private async cleanupResidualBackups(): Promise<void> {
+  private async recoverOrCleanupResidualBackups(): Promise<void> {
     const directory = path.dirname(this.filename);
+    const backups = await this.listResidualBackups(directory);
+    if (backups.length === 0) {
+      return;
+    }
+
+    const current = await this.tryReadAndParse(this.filename);
+    if (current.status === "missing") {
+      const restored = await this.tryRestoreFromBackups(backups);
+      if (!restored) {
+        throw new Error(`配置文件损坏，且无法恢复：${this.filename}`);
+      }
+      await this.cleanupBackupFiles(backups.filter((backup) => backup.path !== restored.path).map((backup) => backup.path));
+      return;
+    }
+
+    if (current.status === "valid") {
+      await this.cleanupBackupFiles(backups.map((backup) => backup.path));
+      return;
+    }
+
+    const restored = await this.tryRestoreFromBackups(backups, async () => {
+      await this.backupCorruptFile();
+    });
+    if (!restored) {
+      await this.backupCorruptFile();
+      throw new Error(`配置文件损坏，且无法恢复：${this.filename}`);
+    }
+    await this.cleanupBackupFiles(backups.filter((backup) => backup.path !== restored.path).map((backup) => backup.path));
+  }
+
+  private async listResidualBackups(directory: string): Promise<Array<{ path: string; name: string; mtimeMs: number }>> {
     const prefix = `${path.basename(this.filename)}.replace-backup-`;
     const entries = await this.fileOps.readdir(directory).catch((error: unknown) => {
       if (isMissingFileError(error)) {
@@ -180,12 +211,73 @@ export class JsonRepository<T> {
       throw error;
     });
 
+    const backups: Array<{ path: string; name: string; mtimeMs: number }> = [];
     for (const entry of entries) {
-      if (!entry.startsWith(prefix)) {
+      if (!entry.startsWith(prefix)) continue;
+      const fullPath = path.join(directory, entry);
+      try {
+        const fileStat = await this.fileOps.stat(fullPath);
+        backups.push({ path: fullPath, name: entry, mtimeMs: fileStat.mtimeMs });
+      } catch (error) {
+        if (!isMissingFileError(error)) {
+          throw error;
+        }
+      }
+    }
+
+    backups.sort((left, right) => {
+      if (left.mtimeMs !== right.mtimeMs) {
+        return right.mtimeMs - left.mtimeMs;
+      }
+      return right.name.localeCompare(left.name);
+    });
+
+    return backups;
+  }
+
+  private async tryRestoreFromBackups(
+    backups: Array<{ path: string; name: string; mtimeMs: number }>,
+    beforeRestore?: () => Promise<void>
+  ): Promise<{ path: string; name: string; mtimeMs: number } | null> {
+    for (const backup of backups) {
+      const parsed = await this.tryReadAndParse(backup.path);
+      if (parsed.status !== "valid") {
         continue;
       }
 
-      const fullPath = path.join(directory, entry);
+      if (beforeRestore) {
+        await beforeRestore();
+      }
+      await this.fileOps.rename(backup.path, this.filename);
+      return backup;
+    }
+
+    return null;
+  }
+
+  private async tryReadAndParse(filename: string): Promise<{ status: "missing" | "invalid" | "valid"; value?: T }> {
+    let content: string;
+    try {
+      content = await this.fileOps.readFile(filename, "utf8");
+    } catch (error) {
+      if (isMissingFileError(error)) {
+        return { status: "missing" };
+      }
+      throw error;
+    }
+
+    try {
+      return {
+        status: "valid",
+        value: this.schema.parse(JSON.parse(content) as unknown)
+      };
+    } catch {
+      return { status: "invalid" };
+    }
+  }
+
+  private async cleanupBackupFiles(paths: string[]): Promise<void> {
+    for (const fullPath of paths) {
       await this.tryRemoveResidualBackup(fullPath);
     }
   }
