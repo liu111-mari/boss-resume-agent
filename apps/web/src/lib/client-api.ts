@@ -27,6 +27,12 @@ export type WorkbenchData = {
   runSummary: WorkbenchRunSummary;
 };
 
+export type WorkbenchOperationalData = {
+  jobs: JobCard[];
+  tasks: GreetingTask[];
+  runSummary: WorkbenchRunSummary;
+};
+
 type ApiErrorPayload = {
   error?: string;
   message?: string;
@@ -48,6 +54,20 @@ export async function loadWorkbenchData(): Promise<WorkbenchData> {
     config: configResponse.config,
     profile: profileResponse.profile,
     template: templateResponse.template,
+    jobs: jobsResponse.jobs,
+    tasks: tasksResponse.tasks,
+    runSummary: runSummaryResponse
+  };
+}
+
+export async function loadOperationalData(): Promise<WorkbenchOperationalData> {
+  const [jobsResponse, tasksResponse, runSummaryResponse] = await Promise.all([
+    fetchJson<{ jobs: JobCard[] }>("/api/jobs"),
+    fetchJson<{ tasks: GreetingTask[] }>("/api/tasks"),
+    fetchJson<WorkbenchRunSummary>("/api/run-summary")
+  ]);
+
+  return {
     jobs: jobsResponse.jobs,
     tasks: tasksResponse.tasks,
     runSummary: runSummaryResponse

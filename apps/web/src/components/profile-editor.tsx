@@ -2,24 +2,41 @@ import React from "react";
 import type { Profile, ProfileItem } from "@boss-agent/shared";
 
 import { Panel, FieldHint } from "@/components/ui";
+import { saveProfile } from "@/lib/client-api";
 
 type ProfileEditorProps = {
   profile: Profile;
-  isSaving: boolean;
   onChange: (next: Profile) => void;
-  onSave: () => void;
+  onSaved: (savedValue: Profile) => void;
+  onStatus?: (message: string) => void;
+  onError?: (message: string) => void;
 };
 
 const itemCategoryOptions: Array<ProfileItem["category"]> = ["skill", "project", "intro", "other"];
 
-export default function ProfileEditor({ profile, isSaving, onChange, onSave }: ProfileEditorProps) {
+export default function ProfileEditor({ profile, onChange, onSaved, onStatus, onError }: ProfileEditorProps) {
+  const [isSaving, setIsSaving] = React.useState(false);
+  const handleSave = React.useCallback(async () => {
+    setIsSaving(true);
+    try {
+      const savedProfile = await saveProfile(profile);
+      onSaved(savedProfile.profile);
+      onStatus?.("个人信息库已保存。");
+      onError?.("");
+    } catch (error) {
+      onError?.(getErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  }, [onError, onSaved, onStatus, profile]);
+
   return (
     <Panel
       id="profile-editor"
       title="个人信息库"
       description="这里存的才是模型允许引用的素材，缺什么就补什么，不要靠模型乱编。"
       actions={
-        <button className="button button-secondary" disabled={isSaving} onClick={onSave} type="button">
+        <button className="button button-secondary" disabled={isSaving} onClick={handleSave} type="button">
           保存个人信息
         </button>
       }
@@ -183,4 +200,8 @@ function parseArrayInput(value: string): string[] {
     .split(/[\n,，]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "未知错误";
 }

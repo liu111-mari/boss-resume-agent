@@ -17,14 +17,8 @@ import RunStatus from "@/components/run-status";
 import TemplateSettings from "@/components/template-settings";
 import { MetricCard, SectionAnchorNav } from "@/components/ui";
 import {
-  approveTasks,
   loadWorkbenchData,
-  rejectTasks,
-  runPipeline,
-  saveConfig,
-  saveProfile,
-  saveTemplate,
-  updateTask,
+  loadOperationalData,
   type WorkbenchData
 } from "@/lib/client-api";
 import type { GreetingPipelineRunCounts } from "@/lib/greeting-pipeline";
@@ -85,18 +79,29 @@ export default function Home() {
   const [statusMessage, setStatusMessage] = useState("正在加载工作台数据。");
   const [isRefreshing, setIsRefreshing] = useState(true);
   const [serviceHealthy, setServiceHealthy] = useState(false);
-  const [isSavingConfig, setIsSavingConfig] = useState(false);
-  const [isRunningPipeline, setIsRunningPipeline] = useState(false);
-  const [isSavingProfile, setIsSavingProfile] = useState(false);
-  const [isSavingTemplate, setIsSavingTemplate] = useState(false);
-  const [isSubmittingQueue, setIsSubmittingQueue] = useState(false);
-  const [savingDraftTaskIds, setSavingDraftTaskIds] = useState<string[]>([]);
   const [draftEdits, setDraftEdits] = useState<Record<string, string>>({});
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
   const [rejectReason, setRejectReason] = useState("");
   const [lastRunCounts, setLastRunCounts] = useState<GreetingPipelineRunCounts | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refreshOperationalData = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      const data = await loadOperationalData();
+      applyOperationalData(data, setTasks, setJobsCount, setRunSummary, setDraftEdits);
+      setServiceHealthy(true);
+      setErrorMessage("");
+      setStatusMessage("运行数据已同步。");
+    } catch (error) {
+      setServiceHealthy(false);
+      setErrorMessage(getErrorMessage(error));
+      setStatusMessage("运行数据同步失败。");
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, []);
+
+  const refreshAllData = useCallback(async () => {
     setIsRefreshing(true);
     try {
       const data = await loadWorkbenchData();
@@ -153,62 +158,17 @@ export default function Home() {
   const pendingReviewCount = tasks.filter((task) => task.status === "pending_review").length;
   const approvedCount = tasks.filter((task) => task.status === "approved").length;
 
-  const saveFilterSettings = useCallback(async () => {
-    setIsSavingConfig(true);
-    try {
-      await saveConfig(config);
-      setStatusMessage("筛选设置已保存。");
-      setErrorMessage("");
-      await refresh();
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error));
-    } finally {
-      setIsSavingConfig(false);
-    }
-  }, [config, refresh]);
+  const handleConfigSaved = useCallback((savedValue: FilterConfig) => {
+    setConfig(savedValue);
+  }, []);
 
-  const runFilterAndGenerate = useCallback(async () => {
-    setIsRunningPipeline(true);
-    try {
-      const response = await runPipeline();
-      setLastRunCounts(response.counts);
-      setStatusMessage("筛选与生成已执行。");
-      setErrorMessage("");
-      await refresh();
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error));
-    } finally {
-      setIsRunningPipeline(false);
-    }
-  }, [refresh]);
+  const handleProfileSaved = useCallback((savedValue: Profile) => {
+    setProfile(savedValue);
+  }, []);
 
-  const saveProfileChanges = useCallback(async () => {
-    setIsSavingProfile(true);
-    try {
-      await saveProfile(profile);
-      setStatusMessage("个人信息库已保存。");
-      setErrorMessage("");
-      await refresh();
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error));
-    } finally {
-      setIsSavingProfile(false);
-    }
-  }, [profile, refresh]);
-
-  const saveTemplateChanges = useCallback(async () => {
-    setIsSavingTemplate(true);
-    try {
-      await saveTemplate(template);
-      setStatusMessage("话术设置已保存。");
-      setErrorMessage("");
-      await refresh();
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error));
-    } finally {
-      setIsSavingTemplate(false);
-    }
-  }, [refresh, template]);
+  const handleTemplateSaved = useCallback((savedValue: GreetingTemplate) => {
+    setTemplate(savedValue);
+  }, []);
 
   const updateDraftValue = useCallback((taskId: string, value: string) => {
     setDraftEdits((current) => ({
@@ -217,28 +177,13 @@ export default function Home() {
     }));
   }, []);
 
-  const saveTaskDraft = useCallback(
-    async (taskId: string) => {
-      const task = tasks.find((item) => item.id === taskId);
-      if (!task) return;
-
-      setSavingDraftTaskIds((current) => (current.includes(taskId) ? current : [...current, taskId]));
-      try {
-        await updateTask({
-          ...task,
-          messageDraft: draftEdits[taskId] ?? task.messageDraft
-        });
-        setStatusMessage("审批话术已保存。");
-        setErrorMessage("");
-        await refresh();
-      } catch (error) {
-        setErrorMessage(getErrorMessage(error));
-      } finally {
-        setSavingDraftTaskIds((current) => current.filter((item) => item !== taskId));
-      }
-    },
-    [draftEdits, refresh, tasks]
-  );
+  const handleTaskSaved = useCallback((savedTask: GreetingTask) => {
+    setTasks((current) => current.map((task) => (task.id === savedTask.id ? savedTask : task)));
+    setDraftEdits((current) => ({
+      ...current,
+      [savedTask.id]: savedTask.messageDraft
+    }));
+  }, []);
 
   const updateTaskSelection = useCallback((taskId: string, checked: boolean) => {
     setSelectedTaskIds((current) =>
@@ -250,40 +195,10 @@ export default function Home() {
     setSelectedTaskIds(tasks.filter((task) => task.status === "pending_review").map((task) => task.id));
   }, [tasks]);
 
-  const approveSelected = useCallback(async () => {
-    if (selectedTaskIds.length === 0) return;
-
-    setIsSubmittingQueue(true);
-    try {
-      await approveTasks(selectedTaskIds);
-      setSelectedTaskIds([]);
-      setStatusMessage("选中任务已批准。");
-      setErrorMessage("");
-      await refresh();
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error));
-    } finally {
-      setIsSubmittingQueue(false);
-    }
-  }, [refresh, selectedTaskIds]);
-
-  const rejectSelected = useCallback(async () => {
-    if (selectedTaskIds.length === 0) return;
-
-    setIsSubmittingQueue(true);
-    try {
-      await rejectTasks(selectedTaskIds, rejectReason.trim() || undefined);
-      setSelectedTaskIds([]);
-      setRejectReason("");
-      setStatusMessage("选中任务已拒绝。");
-      setErrorMessage("");
-      await refresh();
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error));
-    } finally {
-      setIsSubmittingQueue(false);
-    }
-  }, [refresh, rejectReason, selectedTaskIds]);
+  const resetQueueSelection = useCallback(() => {
+    setSelectedTaskIds([]);
+    setRejectReason("");
+  }, []);
 
   return (
     <div className="workbench-shell">
@@ -302,6 +217,9 @@ export default function Home() {
             <p>真实功能优先：筛选、素材、模板、审批、运行状态。</p>
           </div>
           <div className="topbar-status-group">
+            <button className="button button-secondary" onClick={() => void refreshAllData()} type="button">
+              全部刷新
+            </button>
             <span aria-live="polite" className="status-text">
               {serviceHealthy ? "本地服务正常" : "等待服务确认"}
             </span>
@@ -326,25 +244,28 @@ export default function Home() {
           <div className="workspace-column">
             <FilterSettings
               config={config}
-              isRunning={isRunningPipeline}
-              isSaving={isSavingConfig}
               lastRunCounts={lastRunCounts}
               onChange={setConfig}
-              onRun={runFilterAndGenerate}
-              onSave={saveFilterSettings}
+              onError={setErrorMessage}
+              onOperationalRefresh={refreshOperationalData}
+              onRunCompleted={setLastRunCounts}
+              onSaved={handleConfigSaved}
+              onStatus={setStatusMessage}
             />
 
             <ProfileEditor
-              isSaving={isSavingProfile}
               onChange={setProfile}
-              onSave={saveProfileChanges}
+              onError={setErrorMessage}
+              onSaved={handleProfileSaved}
+              onStatus={setStatusMessage}
               profile={profile}
             />
 
             <TemplateSettings
-              isSaving={isSavingTemplate}
               onChange={setTemplate}
-              onSave={saveTemplateChanges}
+              onError={setErrorMessage}
+              onSaved={handleTemplateSaved}
+              onStatus={setStatusMessage}
               tasks={tasks}
               template={template}
             />
@@ -353,24 +274,24 @@ export default function Home() {
           <div className="workspace-column workspace-column-right">
             <ApprovalQueue
               draftEdits={draftEdits}
-              isSubmitting={isSubmittingQueue}
-              onApproveSelected={approveSelected}
               onDraftChange={updateDraftValue}
+              onError={setErrorMessage}
+              onOperationalRefresh={refreshOperationalData}
               onRejectReasonChange={setRejectReason}
-              onRejectSelected={rejectSelected}
-              onSaveDraft={saveTaskDraft}
+              onSelectionReset={resetQueueSelection}
               onSelectAllPending={selectAllPending}
               onSelectionChange={updateTaskSelection}
+              onStatus={setStatusMessage}
+              onTaskSaved={handleTaskSaved}
               profileItemsById={profileItemsById}
               rejectReason={rejectReason}
-              savingTaskIds={savingDraftTaskIds}
               selectedTaskIds={selectedTaskIds}
               tasks={tasks}
             />
 
             <RunStatus
               isRefreshing={isRefreshing}
-              onRefresh={refresh}
+              onRefresh={refreshOperationalData}
               runSummary={runSummary}
               serviceHealthy={serviceHealthy}
             />
@@ -399,6 +320,27 @@ function applyWorkbenchData(
   setRunSummary(data.runSummary);
   setDraftEdits(() =>
     Object.fromEntries(data.tasks.map((task) => [task.id, task.messageDraft]))
+  );
+}
+
+function applyOperationalData(
+  data: {
+    jobs: WorkbenchData["jobs"];
+    tasks: GreetingTask[];
+    runSummary: WorkbenchData["runSummary"];
+  },
+  setTasks: (value: GreetingTask[]) => void,
+  setJobsCount: (value: number) => void,
+  setRunSummary: (value: WorkbenchData["runSummary"]) => void,
+  setDraftEdits: (updater: (current: Record<string, string>) => Record<string, string>) => void
+) {
+  setTasks(data.tasks);
+  setJobsCount(data.jobs.length);
+  setRunSummary(data.runSummary);
+  setDraftEdits((current) =>
+    Object.fromEntries(
+      data.tasks.map((task) => [task.id, current[task.id] ?? task.messageDraft])
+    )
   );
 }
 

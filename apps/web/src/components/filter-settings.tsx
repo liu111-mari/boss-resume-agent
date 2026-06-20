@@ -2,16 +2,18 @@ import React from "react";
 import type { FilterConfig } from "@boss-agent/shared";
 
 import { Panel, FieldHint } from "@/components/ui";
+import { runPipeline, saveConfig } from "@/lib/client-api";
 import type { GreetingPipelineRunCounts } from "@/lib/greeting-pipeline";
 
 type FilterSettingsProps = {
   config: FilterConfig;
-  isSaving: boolean;
-  isRunning: boolean;
   lastRunCounts: GreetingPipelineRunCounts | null;
   onChange: (next: FilterConfig) => void;
-  onSave: () => void;
-  onRun: () => void;
+  onSaved: (savedValue: FilterConfig) => void;
+  onOperationalRefresh: () => Promise<void>;
+  onRunCompleted?: (counts: GreetingPipelineRunCounts) => void;
+  onStatus?: (message: string) => void;
+  onError?: (message: string) => void;
 };
 
 const employmentTypeLabelMap: Record<string, string> = {
@@ -22,13 +24,48 @@ const employmentTypeLabelMap: Record<string, string> = {
 
 export default function FilterSettings({
   config,
-  isSaving,
-  isRunning,
   lastRunCounts,
   onChange,
-  onSave,
-  onRun
+  onSaved,
+  onOperationalRefresh,
+  onRunCompleted,
+  onStatus,
+  onError
 }: FilterSettingsProps) {
+  const [isSaving, setIsSaving] = React.useState(false);
+  const [isRunning, setIsRunning] = React.useState(false);
+
+  const handleSave = React.useCallback(async () => {
+    setIsSaving(true);
+    try {
+      const savedConfig = await saveConfig(config);
+      onSaved(savedConfig.config);
+      onStatus?.("筛选设置已保存。");
+      onError?.("");
+    } catch (error) {
+      onError?.(getErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  }, [config, onError, onSaved, onStatus]);
+
+  const handleRun = React.useCallback(async () => {
+    setIsRunning(true);
+    try {
+      const savedConfig = await saveConfig(config);
+      onSaved(savedConfig.config);
+      const response = await runPipeline();
+      onRunCompleted?.(response.counts);
+      onStatus?.("筛选与生成已执行。");
+      onError?.("");
+      await onOperationalRefresh();
+    } catch (error) {
+      onError?.(getErrorMessage(error));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [config, onError, onOperationalRefresh, onRunCompleted, onSaved, onStatus]);
+
   return (
     <Panel
       id="filter-settings"
@@ -36,10 +73,10 @@ export default function FilterSettings({
       description="编辑真实筛选条件并直接触发流水线，不在前端做本地假筛选。"
       actions={
         <div className="panel-actions-row">
-          <button className="button button-secondary" disabled={isSaving || isRunning} onClick={onSave} type="button">
+          <button className="button button-secondary" disabled={isSaving || isRunning} onClick={handleSave} type="button">
             保存设置
           </button>
-          <button className="button button-primary" disabled={isSaving || isRunning} onClick={onRun} type="button">
+          <button className="button button-primary" disabled={isSaving || isRunning} onClick={handleRun} type="button">
             运行筛选与生成
           </button>
         </div>
@@ -296,4 +333,8 @@ function parseArrayInput(value: string): string[] {
 
 function formatArray(items: string[]): string {
   return items.join("\n");
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "未知错误";
 }

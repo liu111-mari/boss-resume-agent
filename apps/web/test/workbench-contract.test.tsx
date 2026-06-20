@@ -1,4 +1,6 @@
 import React from "react";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -7,6 +9,27 @@ import type { FilterConfig, GreetingTask, Profile, ProfileItem } from "@boss-age
 import ApprovalQueue from "@/components/approval-queue";
 import FilterSettings from "@/components/filter-settings";
 import Home from "@/app/page";
+
+const pageSource = readFileSync(
+  path.resolve("D:/Code/thinking/.worktrees/greeting-automation/apps/web/src/app/page.tsx"),
+  "utf8"
+);
+const filterSettingsSource = readFileSync(
+  path.resolve("D:/Code/thinking/.worktrees/greeting-automation/apps/web/src/components/filter-settings.tsx"),
+  "utf8"
+);
+const profileEditorSource = readFileSync(
+  path.resolve("D:/Code/thinking/.worktrees/greeting-automation/apps/web/src/components/profile-editor.tsx"),
+  "utf8"
+);
+const templateSettingsSource = readFileSync(
+  path.resolve("D:/Code/thinking/.worktrees/greeting-automation/apps/web/src/components/template-settings.tsx"),
+  "utf8"
+);
+const approvalQueueSource = readFileSync(
+  path.resolve("D:/Code/thinking/.worktrees/greeting-automation/apps/web/src/components/approval-queue.tsx"),
+  "utf8"
+);
 
 function createConfig(overrides: Partial<FilterConfig> = {}): FilterConfig {
   return {
@@ -120,12 +143,10 @@ describe("greeting workbench contract", () => {
     const html = renderToStaticMarkup(
       <FilterSettings
         config={createConfig({ dailyLimit: 150 })}
-        isSaving={false}
-        isRunning={false}
         lastRunCounts={null}
         onChange={vi.fn()}
-        onSave={vi.fn()}
-        onRun={vi.fn()}
+        onOperationalRefresh={vi.fn()}
+        onSaved={vi.fn()}
       />
     );
 
@@ -143,13 +164,15 @@ describe("greeting workbench contract", () => {
           createTask(),
           createTask({ id: "task-2", status: "approved", score: 92, refinementFallback: false })
         ]}
-        isSubmitting={false}
         onDraftChange={vi.fn()}
+        onError={vi.fn()}
+        onOperationalRefresh={vi.fn()}
         onRejectReasonChange={vi.fn()}
+        onSelectionReset={vi.fn()}
         onSelectionChange={vi.fn()}
         onSelectAllPending={vi.fn()}
-        onApproveSelected={vi.fn()}
-        onRejectSelected={vi.fn()}
+        onStatus={vi.fn()}
+        onTaskSaved={vi.fn()}
       />
     );
 
@@ -161,5 +184,47 @@ describe("greeting workbench contract", () => {
     expect(html).toContain("0.011");
     expect(html).toContain("回退");
     expect(html).toContain("textarea");
+  });
+
+  it("uses local save callbacks and separates full refresh from operational refresh", () => {
+    expect(pageSource).toContain("const refreshAllData = useCallback");
+    expect(pageSource).toContain("const refreshOperationalData = useCallback");
+
+    expect(pageSource).toMatch(/<FilterSettings[\s\S]*onSaved=/);
+    expect(pageSource).toMatch(/<ProfileEditor[\s\S]*onSaved=/);
+    expect(pageSource).toMatch(/<TemplateSettings[\s\S]*onSaved=/);
+    expect(pageSource).toMatch(/<ApprovalQueue[\s\S]*onTaskSaved=/);
+    expect(pageSource).toMatch(/<ApprovalQueue[\s\S]*onOperationalRefresh=/);
+
+    expect(pageSource).not.toContain("const saveProfileChanges");
+    expect(pageSource).not.toContain("const saveTemplateChanges");
+    expect(pageSource).not.toContain("const saveTaskDraft");
+    expect(pageSource).not.toContain("const approveSelected");
+    expect(pageSource).not.toContain("const rejectSelected");
+  });
+
+  it("keeps save and run side effects inside panel components instead of calling page-wide refresh", () => {
+    expect(filterSettingsSource).toContain("onSaved: (savedValue: FilterConfig) => void");
+    expect(filterSettingsSource).toContain("onOperationalRefresh: () => Promise<void>");
+    expect(filterSettingsSource).toMatch(/await saveConfig\(config\)/);
+    expect(filterSettingsSource).toMatch(/await runPipeline\(\)/);
+    expect(filterSettingsSource).toMatch(/onSaved\(savedConfig\.config\)/);
+    expect(filterSettingsSource).toMatch(/await onOperationalRefresh\(\)/);
+
+    expect(profileEditorSource).toContain("onSaved: (savedValue: Profile) => void");
+    expect(profileEditorSource).toMatch(/await saveProfile\(profile\)/);
+    expect(profileEditorSource).toMatch(/onSaved\(savedProfile\.profile\)/);
+
+    expect(templateSettingsSource).toContain("onSaved: (savedValue: GreetingTemplate) => void");
+    expect(templateSettingsSource).toMatch(/await saveTemplate\(template\)/);
+    expect(templateSettingsSource).toMatch(/onSaved\(savedTemplate\.template\)/);
+
+    expect(approvalQueueSource).toContain("onTaskSaved: (task: GreetingTask) => void");
+    expect(approvalQueueSource).toContain("onOperationalRefresh: () => Promise<void>");
+    expect(approvalQueueSource).toMatch(/await updateTask\(/);
+    expect(approvalQueueSource).toMatch(/onTaskSaved\(savedTask\.task\)/);
+    expect(approvalQueueSource).toMatch(/await approveTasks\(/);
+    expect(approvalQueueSource).toMatch(/await rejectTasks\(/);
+    expect(approvalQueueSource).toMatch(/await onOperationalRefresh\(\)/);
   });
 });

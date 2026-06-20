@@ -2,23 +2,40 @@ import React from "react";
 import type { GreetingTask, GreetingTemplate } from "@boss-agent/shared";
 
 import { Panel, FieldHint, StatusBadge } from "@/components/ui";
+import { saveTemplate } from "@/lib/client-api";
 
 type TemplateSettingsProps = {
   template: GreetingTemplate;
   tasks: GreetingTask[];
-  isSaving: boolean;
   onChange: (next: GreetingTemplate) => void;
-  onSave: () => void;
+  onSaved: (savedValue: GreetingTemplate) => void;
+  onStatus?: (message: string) => void;
+  onError?: (message: string) => void;
 };
 
 export default function TemplateSettings({
   template,
   tasks,
-  isSaving,
   onChange,
-  onSave
+  onSaved,
+  onStatus,
+  onError
 }: TemplateSettingsProps) {
+  const [isSaving, setIsSaving] = React.useState(false);
   const inferredProvider = inferProvider(tasks);
+  const handleSave = React.useCallback(async () => {
+    setIsSaving(true);
+    try {
+      const savedTemplate = await saveTemplate(template);
+      onSaved(savedTemplate.template);
+      onStatus?.("话术设置已保存。");
+      onError?.("");
+    } catch (error) {
+      onError?.(getErrorMessage(error));
+    } finally {
+      setIsSaving(false);
+    }
+  }, [onError, onSaved, onStatus, template]);
 
   return (
     <Panel
@@ -26,7 +43,7 @@ export default function TemplateSettings({
       title="话术设置"
       description="模板只管结构和约束，不持久化供应商 URL 或模型名这种运行时配置。"
       actions={
-        <button className="button button-secondary" disabled={isSaving} onClick={onSave} type="button">
+        <button className="button button-secondary" disabled={isSaving} onClick={handleSave} type="button">
           保存话术设置
         </button>
       }
@@ -157,4 +174,8 @@ function parseArrayInput(value: string): string[] {
     .split(/[\n,，]/)
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "未知错误";
 }

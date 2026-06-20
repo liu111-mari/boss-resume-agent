@@ -2,6 +2,7 @@ import React from "react";
 import type { GreetingTask, GreetingTaskStatus, ProfileItem } from "@boss-agent/shared";
 
 import { Panel, StatusBadge } from "@/components/ui";
+import { approveTasks, rejectTasks, updateTask } from "@/lib/client-api";
 
 type ApprovalQueueProps = {
   tasks: GreetingTask[];
@@ -9,15 +10,15 @@ type ApprovalQueueProps = {
   selectedTaskIds: string[];
   draftEdits?: Record<string, string>;
   rejectReason: string;
-  isSubmitting: boolean;
-  savingTaskIds?: string[];
   onDraftChange: (taskId: string, value: string) => void;
-  onSaveDraft?: (taskId: string) => void;
+  onTaskSaved: (task: GreetingTask) => void;
+  onOperationalRefresh: () => Promise<void>;
   onRejectReasonChange: (value: string) => void;
   onSelectionChange: (taskId: string, checked: boolean) => void;
   onSelectAllPending: () => void;
-  onApproveSelected: () => void;
-  onRejectSelected: () => void;
+  onSelectionReset?: () => void;
+  onStatus?: (message: string) => void;
+  onError?: (message: string) => void;
 };
 
 const visibleStatuses = new Set<GreetingTaskStatus>([
@@ -34,18 +35,77 @@ export default function ApprovalQueue({
   selectedTaskIds,
   draftEdits = {},
   rejectReason,
-  isSubmitting,
-  savingTaskIds = [],
   onDraftChange,
-  onSaveDraft,
+  onTaskSaved,
+  onOperationalRefresh,
   onRejectReasonChange,
   onSelectionChange,
   onSelectAllPending,
-  onApproveSelected,
-  onRejectSelected
+  onSelectionReset,
+  onStatus,
+  onError
 }: ApprovalQueueProps) {
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [savingTaskIds, setSavingTaskIds] = React.useState<string[]>([]);
   const visibleTasks = tasks.filter((task) => visibleStatuses.has(task.status));
   const pendingReviewTasks = visibleTasks.filter((task) => task.status === "pending_review");
+
+  const handleSaveDraft = React.useCallback(
+    async (taskId: string) => {
+      const task = tasks.find((item) => item.id === taskId);
+      if (!task) return;
+
+      setSavingTaskIds((current) => (current.includes(taskId) ? current : [...current, taskId]));
+      try {
+        const savedTask = await updateTask({
+          ...task,
+          messageDraft: draftEdits[taskId] ?? task.messageDraft
+        });
+        onTaskSaved(savedTask.task);
+        onStatus?.("审批话术已保存。");
+        onError?.("");
+      } catch (error) {
+        onError?.(getErrorMessage(error));
+      } finally {
+        setSavingTaskIds((current) => current.filter((item) => item !== taskId));
+      }
+    },
+    [draftEdits, onError, onStatus, onTaskSaved, tasks]
+  );
+
+  const handleApproveSelected = React.useCallback(async () => {
+    if (selectedTaskIds.length === 0) return;
+
+    setIsSubmitting(true);
+    try {
+      await approveTasks(selectedTaskIds);
+      onSelectionReset?.();
+      onStatus?.("选中任务已批准。");
+      onError?.("");
+      await onOperationalRefresh();
+    } catch (error) {
+      onError?.(getErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [onError, onOperationalRefresh, onSelectionReset, onStatus, selectedTaskIds]);
+
+  const handleRejectSelected = React.useCallback(async () => {
+    if (selectedTaskIds.length === 0) return;
+
+    setIsSubmitting(true);
+    try {
+      await rejectTasks(selectedTaskIds, rejectReason.trim() || undefined);
+      onSelectionReset?.();
+      onStatus?.("选中任务已拒绝。");
+      onError?.("");
+      await onOperationalRefresh();
+    } catch (error) {
+      onError?.(getErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [onError, onOperationalRefresh, onSelectionReset, onStatus, rejectReason, selectedTaskIds]);
 
   return (
     <Panel
@@ -57,10 +117,10 @@ export default function ApprovalQueue({
           <button className="button button-secondary" disabled={pendingReviewTasks.length === 0 || isSubmitting} onClick={onSelectAllPending} type="button">
             全选待审批
           </button>
-          <button className="button button-primary" disabled={selectedTaskIds.length === 0 || isSubmitting} onClick={onApproveSelected} type="button">
+          <button className="button button-primary" disabled={selectedTaskIds.length === 0 || isSubmitting} onClick={handleApproveSelected} type="button">
             批准选中
           </button>
-          <button className="button button-danger" disabled={selectedTaskIds.length === 0 || isSubmitting} onClick={onRejectSelected} type="button">
+          <button className="button button-danger" disabled={selectedTaskIds.length === 0 || isSubmitting} onClick={handleRejectSelected} type="button">
             拒绝选中
           </button>
         </div>
@@ -147,18 +207,16 @@ export default function ApprovalQueue({
                 />
               </label>
 
-              {onSaveDraft ? (
-                <div className="queue-card-footer">
-                  <button
-                    className="button button-secondary"
-                    disabled={isSubmitting || savingTaskIds.includes(task.id)}
-                    onClick={() => onSaveDraft(task.id)}
-                    type="button"
-                  >
-                    保存话术
-                  </button>
-                </div>
-              ) : null}
+              <div className="queue-card-footer">
+                <button
+                  className="button button-secondary"
+                  disabled={isSubmitting || savingTaskIds.includes(task.id)}
+                  onClick={() => handleSaveDraft(task.id)}
+                  type="button"
+                >
+                  保存话术
+                </button>
+              </div>
             </article>
           );
         })}
@@ -190,4 +248,8 @@ function buildModelProvenance(task: GreetingTask): string {
     `final ${task.modelProvider || "local"}:${task.modelName || "template"}`,
     `refine ${task.refinementProvider || "local"}:${task.refinementModel || "template"}`
   ].join(" / ");
+}
+
+function getErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : "未知错误";
 }
