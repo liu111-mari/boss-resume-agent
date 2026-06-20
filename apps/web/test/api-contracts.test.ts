@@ -185,6 +185,21 @@ describe("persistent greeting automation API contracts", () => {
     });
   });
 
+  it.each([
+    ["missing jobs", {}],
+    ["unknown fields", { foo: 1 }],
+    ["empty jobs", { jobs: [] }]
+  ])("rejects extension ingest with %s", async (_case, body) => {
+    const ingestRoute = await import("@/app/api/extension/ingest/route");
+    const response = await ingestRoute.POST(jsonRequest("/api/extension/ingest", "POST", body));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      error: "invalid_request",
+      issues: expect.any(Array)
+    });
+  });
+
   it("upserts jobs via jobs and ingest routes and rejects conversations ingest", async () => {
     const jobsRoute = await import("@/app/api/jobs/route");
     const ingestRoute = await import("@/app/api/extension/ingest/route");
