@@ -104,6 +104,18 @@ export class DomainEntityNotFoundError extends Error {
   }
 }
 
+export class DomainConflictError extends Error {
+  constructor(
+    public readonly entityType: "task",
+    public readonly entityId: string,
+    public readonly expectedUpdatedAt: string,
+    public readonly actualUpdatedAt: string
+  ) {
+    super(`${entityType} conflict: ${entityId}`);
+    this.name = "DomainConflictError";
+  }
+}
+
 export function resolveDomainStoreBaseDir(
   baseDir = process.env.BOSS_AGENT_DATA_DIR ?? path.join(process.cwd(), ".boss-agent-data")
 ): string {
@@ -290,6 +302,43 @@ export function createDomainStore(
     });
   }
 
+  async function updateTaskDraft(
+    taskId: string,
+    messageDraft: string,
+    expectedUpdatedAt: string
+  ): Promise<GreetingTask> {
+    return queueMutation("tasks", async () => {
+      const tasks = await repositories.tasks.read();
+      const index = tasks.findIndex((task) => task.id === taskId);
+      if (index < 0) {
+        throw new DomainEntityNotFoundError("task", taskId);
+      }
+
+      const current = tasks[index];
+      if (current.status !== "pending_review") {
+        throw new DomainTransitionError(current.status, current.status);
+      }
+
+      if (current.updatedAt !== expectedUpdatedAt) {
+        throw new DomainConflictError("task", taskId, expectedUpdatedAt, current.updatedAt);
+      }
+
+      const next = greetingTaskSchema.parse({
+        ...current,
+        messageDraft: messageDraft.trim(),
+        updatedAt: new Date().toISOString()
+      });
+
+      if (!hasTaskChanged(current, next)) {
+        return current;
+      }
+
+      tasks[index] = next;
+      await repositories.tasks.write(tasks);
+      return next;
+    });
+  }
+
   async function approveTasks(taskIds: string[]): Promise<GreetingTask[]> {
     return mutateTasksAtomically(taskIds, "approved");
   }
@@ -360,6 +409,7 @@ export function createDomainStore(
     getTasks,
     createOrUpdateTask,
     createTaskIfNoActiveJobTask,
+    updateTaskDraft,
     approveTasks,
     rejectTasks,
     transitionTask,

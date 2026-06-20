@@ -22,6 +22,7 @@ import {
   type WorkbenchData
 } from "@/lib/client-api";
 import type { GreetingPipelineRunCounts } from "@/lib/greeting-pipeline";
+import { reconcileSelectedTaskIds } from "@/lib/workbench-helpers";
 
 const anchorItems = [
   { href: "#overview", label: "概览" },
@@ -158,6 +159,11 @@ export default function Home() {
   const pendingReviewCount = tasks.filter((task) => task.status === "pending_review").length;
   const approvedCount = tasks.filter((task) => task.status === "approved").length;
 
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelectedTaskIds((current) => reconcileSelectedTaskIds(tasks, current));
+  }, [tasks]);
+
   const handleConfigSaved = useCallback((savedValue: FilterConfig) => {
     setConfig(savedValue);
   }, []);
@@ -243,6 +249,7 @@ export default function Home() {
         <section className="workspace">
           <div className="workspace-column">
             <FilterSettings
+              key={`filter-numbers:${config.minSalary ?? ""}:${config.maxSalary ?? ""}:${config.scoreThreshold}:${config.dailyLimit}`}
               config={config}
               lastRunCounts={lastRunCounts}
               onChange={setConfig}
@@ -262,6 +269,7 @@ export default function Home() {
             />
 
             <TemplateSettings
+              key={`template-numbers:${template.minLength}:${template.maxLength}:${template.maxSkills}:${template.maxProjects}:${template.version}`}
               onChange={setTemplate}
               onError={setErrorMessage}
               onSaved={handleTemplateSaved}

@@ -4,6 +4,7 @@ import type { FilterConfig } from "@boss-agent/shared";
 import { Panel, FieldHint } from "@/components/ui";
 import { runPipeline, saveConfig } from "@/lib/client-api";
 import type { GreetingPipelineRunCounts } from "@/lib/greeting-pipeline";
+import { parseNullableNumberDraft, parseRequiredNumberDraft } from "@/lib/workbench-helpers";
 
 type FilterSettingsProps = {
   config: FilterConfig;
@@ -34,11 +35,52 @@ export default function FilterSettings({
 }: FilterSettingsProps) {
   const [isSaving, setIsSaving] = React.useState(false);
   const [isRunning, setIsRunning] = React.useState(false);
+  const [minSalaryDraft, setMinSalaryDraft] = React.useState(formatNullableNumberDraft(config.minSalary));
+  const [maxSalaryDraft, setMaxSalaryDraft] = React.useState(formatNullableNumberDraft(config.maxSalary));
+  const [scoreThresholdDraft, setScoreThresholdDraft] = React.useState(String(config.scoreThreshold));
+  const [dailyLimitDraft, setDailyLimitDraft] = React.useState(String(config.dailyLimit));
+
+  const buildValidatedConfig = React.useCallback((): FilterConfig | null => {
+    const parsedMinSalary = parseNullableNumberDraft(minSalaryDraft);
+    if (!parsedMinSalary.ok) {
+      onError?.(parsedMinSalary.message);
+      return null;
+    }
+
+    const parsedMaxSalary = parseNullableNumberDraft(maxSalaryDraft);
+    if (!parsedMaxSalary.ok) {
+      onError?.(parsedMaxSalary.message);
+      return null;
+    }
+
+    const parsedScoreThreshold = parseRequiredNumberDraft(scoreThresholdDraft);
+    if (!parsedScoreThreshold.ok) {
+      onError?.(parsedScoreThreshold.message);
+      return null;
+    }
+
+    const parsedDailyLimit = parseRequiredNumberDraft(dailyLimitDraft);
+    if (!parsedDailyLimit.ok) {
+      onError?.(parsedDailyLimit.message);
+      return null;
+    }
+
+    return {
+      ...config,
+      minSalary: parsedMinSalary.value,
+      maxSalary: parsedMaxSalary.value,
+      scoreThreshold: parsedScoreThreshold.value,
+      dailyLimit: parsedDailyLimit.value
+    };
+  }, [config, dailyLimitDraft, maxSalaryDraft, minSalaryDraft, onError, scoreThresholdDraft]);
 
   const handleSave = React.useCallback(async () => {
+    const nextConfig = buildValidatedConfig();
+    if (!nextConfig) return;
+
     setIsSaving(true);
     try {
-      const savedConfig = await saveConfig(config);
+      const savedConfig = await saveConfig(nextConfig);
       onSaved(savedConfig.config);
       onStatus?.("筛选设置已保存。");
       onError?.("");
@@ -47,12 +89,15 @@ export default function FilterSettings({
     } finally {
       setIsSaving(false);
     }
-  }, [config, onError, onSaved, onStatus]);
+  }, [buildValidatedConfig, onError, onSaved, onStatus]);
 
   const handleRun = React.useCallback(async () => {
+    const nextConfig = buildValidatedConfig();
+    if (!nextConfig) return;
+
     setIsRunning(true);
     try {
-      const savedConfig = await saveConfig(config);
+      const savedConfig = await saveConfig(nextConfig);
       onSaved(savedConfig.config);
       const response = await runPipeline();
       onRunCompleted?.(response.counts);
@@ -64,7 +109,7 @@ export default function FilterSettings({
     } finally {
       setIsRunning(false);
     }
-  }, [config, onError, onOperationalRefresh, onRunCompleted, onSaved, onStatus]);
+  }, [buildValidatedConfig, onError, onOperationalRefresh, onRunCompleted, onSaved, onStatus]);
 
   return (
     <Panel
@@ -129,9 +174,9 @@ export default function FilterSettings({
                 className="input"
                 inputMode="numeric"
                 name="minSalary"
-                onChange={(event) => updateNullableNumberField("minSalary", event.target.value, config, onChange)}
+                onChange={(event) => setMinSalaryDraft(event.target.value)}
                 type="number"
-                value={config.minSalary ?? ""}
+                value={minSalaryDraft}
               />
             </label>
             <label className="field">
@@ -141,9 +186,9 @@ export default function FilterSettings({
                 className="input"
                 inputMode="numeric"
                 name="maxSalary"
-                onChange={(event) => updateNullableNumberField("maxSalary", event.target.value, config, onChange)}
+                onChange={(event) => setMaxSalaryDraft(event.target.value)}
                 type="number"
-                value={config.maxSalary ?? ""}
+                value={maxSalaryDraft}
               />
             </label>
           </div>
@@ -235,9 +280,9 @@ export default function FilterSettings({
             max={100}
             min={0}
             name="scoreThreshold"
-            onChange={(event) => updateNumberField("scoreThreshold", event.target.value, config, onChange)}
+            onChange={(event) => setScoreThresholdDraft(event.target.value)}
             type="number"
-            value={config.scoreThreshold}
+            value={scoreThresholdDraft}
           />
         </label>
 
@@ -249,9 +294,9 @@ export default function FilterSettings({
             max={150}
             min={1}
             name="dailyLimit"
-            onChange={(event) => updateNumberField("dailyLimit", event.target.value, config, onChange)}
+            onChange={(event) => setDailyLimitDraft(event.target.value)}
             type="number"
-            value={config.dailyLimit}
+            value={dailyLimitDraft}
           />
         </label>
       </div>
@@ -300,30 +345,6 @@ function updateEmploymentTypes(value: string, config: FilterConfig, onChange: (n
   });
 }
 
-function updateNullableNumberField<K extends "minSalary" | "maxSalary">(
-  key: K,
-  value: string,
-  config: FilterConfig,
-  onChange: (next: FilterConfig) => void
-) {
-  onChange({
-    ...config,
-    [key]: value.trim() === "" ? null : Number(value)
-  });
-}
-
-function updateNumberField<K extends "scoreThreshold" | "dailyLimit">(
-  key: K,
-  value: string,
-  config: FilterConfig,
-  onChange: (next: FilterConfig) => void
-) {
-  onChange({
-    ...config,
-    [key]: Number(value)
-  });
-}
-
 function parseArrayInput(value: string): string[] {
   return value
     .split(/[\n,，]/)
@@ -333,6 +354,10 @@ function parseArrayInput(value: string): string[] {
 
 function formatArray(items: string[]): string {
   return items.join("\n");
+}
+
+function formatNullableNumberDraft(value: number | null): string {
+  return value === null ? "" : String(value);
 }
 
 function getErrorMessage(error: unknown): string {

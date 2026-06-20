@@ -339,6 +339,77 @@ describe("persistent greeting automation API contracts", () => {
     });
   });
 
+  it("patches pending_review drafts atomically and returns 409 for stale or transitioned tasks", async () => {
+    const tasksRoute = await import("@/app/api/tasks/route");
+    const draftRoute = await import("@/app/api/tasks/draft/route");
+    const store = await makeStore();
+
+    const createResponse = await tasksRoute.POST(
+      jsonRequest("/api/tasks", "POST", {
+        task: createTask({
+          id: "task-draft",
+          status: "pending_review",
+          updatedAt: "2026-06-19T00:00:00.000Z"
+        })
+      })
+    );
+    expect(createResponse.status).toBe(200);
+
+    const staleCreateResponse = await tasksRoute.POST(
+      jsonRequest("/api/tasks", "POST", {
+        task: createTask({
+          id: "task-draft-stale",
+          status: "pending_review",
+          updatedAt: "2026-06-19T00:00:00.000Z"
+        })
+      })
+    );
+    expect(staleCreateResponse.status).toBe(200);
+
+    const successResponse = await draftRoute.POST(
+      jsonRequest("/api/tasks/draft", "POST", {
+        taskId: "task-draft",
+        messageDraft: "新的待审批话术",
+        expectedUpdatedAt: "2026-06-19T00:00:00.000Z"
+      })
+    );
+    expect(successResponse.status).toBe(200);
+    const successPayload = await successResponse.json();
+    expect(successPayload).toMatchObject({
+      task: expect.objectContaining({
+        id: "task-draft",
+        status: "pending_review",
+        messageDraft: "新的待审批话术"
+      })
+    });
+
+    await store.transitionTask("task-draft", "approved");
+
+    const transitionedResponse = await draftRoute.POST(
+      jsonRequest("/api/tasks/draft", "POST", {
+        taskId: "task-draft",
+        messageDraft: "过期覆盖",
+        expectedUpdatedAt: successPayload.task.updatedAt
+      })
+    );
+    expect(transitionedResponse.status).toBe(409);
+    await expect(transitionedResponse.json()).resolves.toMatchObject({
+      error: "illegal_transition"
+    });
+
+    const staleResponse = await draftRoute.POST(
+      jsonRequest("/api/tasks/draft", "POST", {
+        taskId: "task-draft-stale",
+        messageDraft: "更旧的话术",
+        expectedUpdatedAt: "2026-06-18T00:00:00.000Z"
+      })
+    );
+    expect(staleResponse.status).toBe(409);
+    await expect(staleResponse.json()).resolves.toMatchObject({
+      error: "conflict"
+    });
+  });
+
   it("returns run summary for today's local date with status counts and recent logs", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-19T12:00:00.000Z"));

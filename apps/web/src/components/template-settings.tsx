@@ -3,6 +3,7 @@ import type { GreetingTask, GreetingTemplate } from "@boss-agent/shared";
 
 import { Panel, FieldHint, StatusBadge } from "@/components/ui";
 import { saveTemplate } from "@/lib/client-api";
+import { parseRequiredNumberDraft } from "@/lib/workbench-helpers";
 
 type TemplateSettingsProps = {
   template: GreetingTemplate;
@@ -22,11 +23,61 @@ export default function TemplateSettings({
   onError
 }: TemplateSettingsProps) {
   const [isSaving, setIsSaving] = React.useState(false);
+  const [minLengthDraft, setMinLengthDraft] = React.useState(String(template.minLength));
+  const [maxLengthDraft, setMaxLengthDraft] = React.useState(String(template.maxLength));
+  const [maxSkillsDraft, setMaxSkillsDraft] = React.useState(String(template.maxSkills));
+  const [maxProjectsDraft, setMaxProjectsDraft] = React.useState(String(template.maxProjects));
+  const [versionDraft, setVersionDraft] = React.useState(String(template.version));
   const inferredProvider = inferProvider(tasks);
+
+  const buildValidatedTemplate = React.useCallback((): GreetingTemplate | null => {
+    const parsedMinLength = parseRequiredNumberDraft(minLengthDraft);
+    if (!parsedMinLength.ok) {
+      onError?.(parsedMinLength.message);
+      return null;
+    }
+
+    const parsedMaxLength = parseRequiredNumberDraft(maxLengthDraft);
+    if (!parsedMaxLength.ok) {
+      onError?.(parsedMaxLength.message);
+      return null;
+    }
+
+    const parsedMaxSkills = parseRequiredNumberDraft(maxSkillsDraft);
+    if (!parsedMaxSkills.ok) {
+      onError?.(parsedMaxSkills.message);
+      return null;
+    }
+
+    const parsedMaxProjects = parseRequiredNumberDraft(maxProjectsDraft);
+    if (!parsedMaxProjects.ok) {
+      onError?.(parsedMaxProjects.message);
+      return null;
+    }
+
+    const parsedVersion = parseRequiredNumberDraft(versionDraft);
+    if (!parsedVersion.ok) {
+      onError?.(parsedVersion.message);
+      return null;
+    }
+
+    return {
+      ...template,
+      minLength: parsedMinLength.value,
+      maxLength: parsedMaxLength.value,
+      maxSkills: parsedMaxSkills.value,
+      maxProjects: parsedMaxProjects.value,
+      version: parsedVersion.value
+    };
+  }, [maxLengthDraft, maxProjectsDraft, maxSkillsDraft, minLengthDraft, onError, template, versionDraft]);
+
   const handleSave = React.useCallback(async () => {
+    const nextTemplate = buildValidatedTemplate();
+    if (!nextTemplate) return;
+
     setIsSaving(true);
     try {
-      const savedTemplate = await saveTemplate(template);
+      const savedTemplate = await saveTemplate(nextTemplate);
       onSaved(savedTemplate.template);
       onStatus?.("话术设置已保存。");
       onError?.("");
@@ -35,7 +86,7 @@ export default function TemplateSettings({
     } finally {
       setIsSaving(false);
     }
-  }, [onError, onSaved, onStatus, template]);
+  }, [buildValidatedTemplate, onError, onSaved, onStatus]);
 
   return (
     <Panel
@@ -86,9 +137,9 @@ export default function TemplateSettings({
             aria-label="最短长度"
             className="input"
             min={1}
-            onChange={(event) => onChange({ ...template, minLength: Number(event.target.value) })}
+            onChange={(event) => setMinLengthDraft(event.target.value)}
             type="number"
-            value={template.minLength}
+            value={minLengthDraft}
           />
         </label>
 
@@ -98,9 +149,9 @@ export default function TemplateSettings({
             aria-label="最长长度"
             className="input"
             min={20}
-            onChange={(event) => onChange({ ...template, maxLength: Number(event.target.value) })}
+            onChange={(event) => setMaxLengthDraft(event.target.value)}
             type="number"
-            value={template.maxLength}
+            value={maxLengthDraft}
           />
         </label>
 
@@ -110,9 +161,9 @@ export default function TemplateSettings({
             aria-label="最多技能条数"
             className="input"
             min={0}
-            onChange={(event) => onChange({ ...template, maxSkills: Number(event.target.value) })}
+            onChange={(event) => setMaxSkillsDraft(event.target.value)}
             type="number"
-            value={template.maxSkills}
+            value={maxSkillsDraft}
           />
         </label>
 
@@ -122,9 +173,9 @@ export default function TemplateSettings({
             aria-label="最多项目条数"
             className="input"
             min={0}
-            onChange={(event) => onChange({ ...template, maxProjects: Number(event.target.value) })}
+            onChange={(event) => setMaxProjectsDraft(event.target.value)}
             type="number"
-            value={template.maxProjects}
+            value={maxProjectsDraft}
           />
         </label>
 
@@ -134,9 +185,9 @@ export default function TemplateSettings({
             aria-label="模板版本"
             className="input"
             min={1}
-            onChange={(event) => onChange({ ...template, version: Number(event.target.value) })}
+            onChange={(event) => setVersionDraft(event.target.value)}
             type="number"
-            value={template.version}
+            value={versionDraft}
           />
         </label>
       </div>

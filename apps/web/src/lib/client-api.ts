@@ -124,6 +124,16 @@ export async function updateTask(task: GreetingTask) {
   });
 }
 
+export async function updateTaskDraft(taskId: string, messageDraft: string, expectedUpdatedAt: string) {
+  return fetchJson<{ task: GreetingTask }>("/api/tasks/draft", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify({ taskId, messageDraft, expectedUpdatedAt })
+  });
+}
+
 export async function approveTasks(taskIds: string[]) {
   return fetchJson<{ tasks: GreetingTask[] }>("/api/tasks/approve", {
     method: "POST",
@@ -146,18 +156,29 @@ export async function rejectTasks(taskIds: string[], reason?: string) {
 
 export async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {
   const response = await fetch(input, init);
-  const payload = (await response.json()) as T | ApiErrorPayload;
+  const rawText = await response.text();
+
+  if (rawText.trim() === "") {
+    throw new Error("响应为空");
+  }
+
+  let payload: T | ApiErrorPayload;
+  try {
+    payload = JSON.parse(rawText) as T | ApiErrorPayload;
+  } catch {
+    throw new Error(`服务返回非 JSON 响应（HTTP ${response.status}）`);
+  }
 
   if (!response.ok) {
-    throw new Error(buildApiErrorMessage(payload));
+    throw new Error(buildApiErrorMessage(payload, response.status));
   }
 
   return payload as T;
 }
 
-function buildApiErrorMessage(payload: unknown): string {
+function buildApiErrorMessage(payload: unknown, status: number): string {
   if (!payload || typeof payload !== "object") {
-    return "请求失败";
+    return `请求失败（HTTP ${status}）`;
   }
 
   const body = payload as ApiErrorPayload;
@@ -176,5 +197,5 @@ function buildApiErrorMessage(payload: unknown): string {
     return body.error;
   }
 
-  return "请求失败";
+  return `请求失败（HTTP ${status}）`;
 }

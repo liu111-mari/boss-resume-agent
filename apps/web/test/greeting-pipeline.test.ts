@@ -228,6 +228,25 @@ function createPipelineStoreStub(jobs: JobCard[]): PipelineStore {
       tasks.unshift(task);
       return task;
     }),
+    updateTaskDraft: vi.fn(async (taskId: string, messageDraft: string, expectedUpdatedAt: string) => {
+      const index = tasks.findIndex((item) => item.id === taskId);
+      if (index < 0) {
+        throw new Error(`missing task: ${taskId}`);
+      }
+
+      const current = tasks[index];
+      if (current.updatedAt !== expectedUpdatedAt) {
+        throw new Error(`stale task: ${taskId}`);
+      }
+
+      const next = {
+        ...current,
+        messageDraft,
+        updatedAt: FIXED_NOW
+      };
+      tasks[index] = next;
+      return next;
+    }),
     approveTasks: vi.fn(async () => []),
     rejectTasks: vi.fn(async () => []),
     transitionTask: vi.fn(async (taskId: string, status: GreetingTask["status"], metadata?: Partial<GreetingTask>) => {

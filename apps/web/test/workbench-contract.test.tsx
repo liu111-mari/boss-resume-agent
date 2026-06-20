@@ -1,5 +1,6 @@
 import React from "react";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
@@ -10,26 +11,12 @@ import ApprovalQueue from "@/components/approval-queue";
 import FilterSettings from "@/components/filter-settings";
 import Home from "@/app/page";
 
-const pageSource = readFileSync(
-  path.resolve("D:/Code/thinking/.worktrees/greeting-automation/apps/web/src/app/page.tsx"),
-  "utf8"
-);
-const filterSettingsSource = readFileSync(
-  path.resolve("D:/Code/thinking/.worktrees/greeting-automation/apps/web/src/components/filter-settings.tsx"),
-  "utf8"
-);
-const profileEditorSource = readFileSync(
-  path.resolve("D:/Code/thinking/.worktrees/greeting-automation/apps/web/src/components/profile-editor.tsx"),
-  "utf8"
-);
-const templateSettingsSource = readFileSync(
-  path.resolve("D:/Code/thinking/.worktrees/greeting-automation/apps/web/src/components/template-settings.tsx"),
-  "utf8"
-);
-const approvalQueueSource = readFileSync(
-  path.resolve("D:/Code/thinking/.worktrees/greeting-automation/apps/web/src/components/approval-queue.tsx"),
-  "utf8"
-);
+const testDir = path.dirname(fileURLToPath(import.meta.url));
+const pageSource = readFileSync(path.resolve(testDir, "../src/app/page.tsx"), "utf8");
+const filterSettingsSource = readFileSync(path.resolve(testDir, "../src/components/filter-settings.tsx"), "utf8");
+const profileEditorSource = readFileSync(path.resolve(testDir, "../src/components/profile-editor.tsx"), "utf8");
+const templateSettingsSource = readFileSync(path.resolve(testDir, "../src/components/template-settings.tsx"), "utf8");
+const approvalQueueSource = readFileSync(path.resolve(testDir, "../src/components/approval-queue.tsx"), "utf8");
 
 function createConfig(overrides: Partial<FilterConfig> = {}): FilterConfig {
   return {
@@ -206,7 +193,8 @@ describe("greeting workbench contract", () => {
   it("keeps save and run side effects inside panel components instead of calling page-wide refresh", () => {
     expect(filterSettingsSource).toContain("onSaved: (savedValue: FilterConfig) => void");
     expect(filterSettingsSource).toContain("onOperationalRefresh: () => Promise<void>");
-    expect(filterSettingsSource).toMatch(/await saveConfig\(config\)/);
+    expect(filterSettingsSource).toContain("const nextConfig = buildValidatedConfig()");
+    expect(filterSettingsSource).toMatch(/await saveConfig\(nextConfig\)/);
     expect(filterSettingsSource).toMatch(/await runPipeline\(\)/);
     expect(filterSettingsSource).toMatch(/onSaved\(savedConfig\.config\)/);
     expect(filterSettingsSource).toMatch(/await onOperationalRefresh\(\)/);
@@ -216,12 +204,13 @@ describe("greeting workbench contract", () => {
     expect(profileEditorSource).toMatch(/onSaved\(savedProfile\.profile\)/);
 
     expect(templateSettingsSource).toContain("onSaved: (savedValue: GreetingTemplate) => void");
-    expect(templateSettingsSource).toMatch(/await saveTemplate\(template\)/);
+    expect(templateSettingsSource).toContain("const nextTemplate = buildValidatedTemplate()");
+    expect(templateSettingsSource).toMatch(/await saveTemplate\(nextTemplate\)/);
     expect(templateSettingsSource).toMatch(/onSaved\(savedTemplate\.template\)/);
 
     expect(approvalQueueSource).toContain("onTaskSaved: (task: GreetingTask) => void");
     expect(approvalQueueSource).toContain("onOperationalRefresh: () => Promise<void>");
-    expect(approvalQueueSource).toMatch(/await updateTask\(/);
+    expect(approvalQueueSource).toMatch(/await updateTaskDraft\(/);
     expect(approvalQueueSource).toMatch(/onTaskSaved\(savedTask\.task\)/);
     expect(approvalQueueSource).toMatch(/await approveTasks\(/);
     expect(approvalQueueSource).toMatch(/await rejectTasks\(/);

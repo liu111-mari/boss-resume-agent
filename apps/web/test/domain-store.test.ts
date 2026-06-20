@@ -6,7 +6,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { GreetingTask, JobCard } from "@boss-agent/shared";
-import { createDomainStore, DomainEntityNotFoundError, DomainTransitionError } from "@/lib/domain-store";
+import {
+  createDomainStore,
+  DomainConflictError,
+  DomainEntityNotFoundError,
+  DomainTransitionError
+} from "@/lib/domain-store";
 
 function createJob(overrides: Partial<JobCard> = {}): JobCard {
   return {
@@ -310,6 +315,72 @@ describe("domain store", () => {
       })
     );
     expect(second.updatedAt).toBe("2026-06-19T10:00:00.000Z");
+  });
+
+  it("updates only the draft for a pending_review task when expectedUpdatedAt matches", async () => {
+    const store = await makeStore();
+    await store.createOrUpdateTask(createTask({ status: "pending_review" }));
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-19T11:00:00.000Z"));
+
+    const updated = await store.updateTaskDraft(
+      "task-1",
+      "新的待审话术",
+      "2026-06-19T00:00:00.000Z"
+    );
+
+    expect(updated).toMatchObject({
+      id: "task-1",
+      status: "pending_review",
+      messageDraft: "新的待审话术",
+      updatedAt: "2026-06-19T11:00:00.000Z"
+    });
+    expect(updated.modelProvider).toBe("local");
+  });
+
+  it("rejects draft updates when the task has already transitioned away from pending_review", async () => {
+    const store = await makeStore();
+    await store.createOrUpdateTask(createTask({ status: "pending_review" }));
+    await store.transitionTask("task-1", "approved");
+
+    await expect(
+      store.updateTaskDraft("task-1", "旧草稿覆盖", "2026-06-19T00:00:00.000Z")
+    ).rejects.toBeInstanceOf(DomainTransitionError);
+
+    await expect(store.getTasks()).resolves.toEqual([
+      expect.objectContaining({
+        id: "task-1",
+        status: "approved",
+        messageDraft: "您好，我想进一步沟通该岗位。"
+      })
+    ]);
+  });
+
+  it("rejects stale draft updates with DomainConflictError and leaves task state untouched", async () => {
+    const store = await makeStore();
+    await store.createOrUpdateTask(createTask({ status: "pending_review" }));
+
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-19T12:00:00.000Z"));
+    const first = await store.updateTaskDraft(
+      "task-1",
+      "第一版草稿",
+      "2026-06-19T00:00:00.000Z"
+    );
+
+    await expect(
+      store.updateTaskDraft("task-1", "过期草稿", "2026-06-19T00:00:00.000Z")
+    ).rejects.toBeInstanceOf(DomainConflictError);
+
+    await expect(store.getTasks()).resolves.toEqual([
+      expect.objectContaining({
+        id: "task-1",
+        status: "pending_review",
+        messageDraft: "第一版草稿",
+        updatedAt: first.updatedAt
+      })
+    ]);
   });
 
   it("increments daily usage concurrently without losing updates", async () => {

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { ZodError, type ZodType } from "zod";
 
-import { DomainEntityNotFoundError, DomainTransitionError } from "@/lib/domain-store";
+import { DomainConflictError, DomainEntityNotFoundError, DomainTransitionError } from "@/lib/domain-store";
 
 type SerializableIssue = {
   code: string;
@@ -88,6 +88,19 @@ export function createErrorResponse(error: unknown): Response {
         entityId: error.entityId
       },
       { status: 404 }
+    );
+  }
+
+  if (error instanceof DomainConflictError) {
+    return NextResponse.json(
+      {
+        error: "conflict",
+        entityType: error.entityType,
+        entityId: error.entityId,
+        expectedUpdatedAt: error.expectedUpdatedAt,
+        actualUpdatedAt: error.actualUpdatedAt
+      },
+      { status: 409 }
     );
   }
 

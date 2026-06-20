@@ -2,7 +2,8 @@ import React from "react";
 import type { GreetingTask, GreetingTaskStatus, ProfileItem } from "@boss-agent/shared";
 
 import { Panel, StatusBadge } from "@/components/ui";
-import { approveTasks, rejectTasks, updateTask } from "@/lib/client-api";
+import { approveTasks, rejectTasks, updateTaskDraft } from "@/lib/client-api";
+import { reconcileSelectedTaskIds } from "@/lib/workbench-helpers";
 
 type ApprovalQueueProps = {
   tasks: GreetingTask[];
@@ -49,6 +50,7 @@ export default function ApprovalQueue({
   const [savingTaskIds, setSavingTaskIds] = React.useState<string[]>([]);
   const visibleTasks = tasks.filter((task) => visibleStatuses.has(task.status));
   const pendingReviewTasks = visibleTasks.filter((task) => task.status === "pending_review");
+  const actionableSelectedTaskIds = reconcileSelectedTaskIds(tasks, selectedTaskIds);
 
   const handleSaveDraft = React.useCallback(
     async (taskId: string) => {
@@ -57,10 +59,11 @@ export default function ApprovalQueue({
 
       setSavingTaskIds((current) => (current.includes(taskId) ? current : [...current, taskId]));
       try {
-        const savedTask = await updateTask({
-          ...task,
-          messageDraft: draftEdits[taskId] ?? task.messageDraft
-        });
+        const savedTask = await updateTaskDraft(
+          task.id,
+          draftEdits[taskId] ?? task.messageDraft,
+          task.updatedAt
+        );
         onTaskSaved(savedTask.task);
         onStatus?.("审批话术已保存。");
         onError?.("");
@@ -74,11 +77,11 @@ export default function ApprovalQueue({
   );
 
   const handleApproveSelected = React.useCallback(async () => {
-    if (selectedTaskIds.length === 0) return;
+    if (actionableSelectedTaskIds.length === 0) return;
 
     setIsSubmitting(true);
     try {
-      await approveTasks(selectedTaskIds);
+      await approveTasks(actionableSelectedTaskIds);
       onSelectionReset?.();
       onStatus?.("选中任务已批准。");
       onError?.("");
@@ -88,14 +91,14 @@ export default function ApprovalQueue({
     } finally {
       setIsSubmitting(false);
     }
-  }, [onError, onOperationalRefresh, onSelectionReset, onStatus, selectedTaskIds]);
+  }, [actionableSelectedTaskIds, onError, onOperationalRefresh, onSelectionReset, onStatus]);
 
   const handleRejectSelected = React.useCallback(async () => {
-    if (selectedTaskIds.length === 0) return;
+    if (actionableSelectedTaskIds.length === 0) return;
 
     setIsSubmitting(true);
     try {
-      await rejectTasks(selectedTaskIds, rejectReason.trim() || undefined);
+      await rejectTasks(actionableSelectedTaskIds, rejectReason.trim() || undefined);
       onSelectionReset?.();
       onStatus?.("选中任务已拒绝。");
       onError?.("");
@@ -105,7 +108,7 @@ export default function ApprovalQueue({
     } finally {
       setIsSubmitting(false);
     }
-  }, [onError, onOperationalRefresh, onSelectionReset, onStatus, rejectReason, selectedTaskIds]);
+  }, [actionableSelectedTaskIds, onError, onOperationalRefresh, onSelectionReset, onStatus, rejectReason]);
 
   return (
     <Panel
@@ -117,10 +120,10 @@ export default function ApprovalQueue({
           <button className="button button-secondary" disabled={pendingReviewTasks.length === 0 || isSubmitting} onClick={onSelectAllPending} type="button">
             全选待审批
           </button>
-          <button className="button button-primary" disabled={selectedTaskIds.length === 0 || isSubmitting} onClick={handleApproveSelected} type="button">
+          <button className="button button-primary" disabled={actionableSelectedTaskIds.length === 0 || isSubmitting} onClick={handleApproveSelected} type="button">
             批准选中
           </button>
-          <button className="button button-danger" disabled={selectedTaskIds.length === 0 || isSubmitting} onClick={handleRejectSelected} type="button">
+          <button className="button button-danger" disabled={actionableSelectedTaskIds.length === 0 || isSubmitting} onClick={handleRejectSelected} type="button">
             拒绝选中
           </button>
         </div>
