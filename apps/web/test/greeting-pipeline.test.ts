@@ -157,6 +157,103 @@ function createProvider(overrides: Partial<GreetingModelProvider> = {}): Greetin
   };
 }
 
+type PipelineStore = ReturnType<typeof createDomainStore>;
+
+function createPipelineStoreStub(jobs: JobCard[]): PipelineStore {
+  const tasks: GreetingTask[] = [];
+  const logs: Array<Record<string, unknown>> = [];
+  const config = {
+    targetTitles: [],
+    cities: [],
+    salaryUnit: "day" as const,
+    minSalary: null,
+    maxSalary: null,
+    employmentTypes: [],
+    requiredKeywords: ["SQL", "Python"],
+    excludedKeywords: [],
+    blockedCompanies: [],
+    blockedIndustries: [],
+    allowedExperience: [],
+    allowedEducation: [],
+    scoreThreshold: 70,
+    dailyLimit: 100
+  };
+  const profile = createProfile();
+  const template = {
+    body: "你好，我是{{school}}{{major}}学生，想应聘{{jobTitle}}，熟悉{{skills}}，做过{{projects}}。{{selfIntro}}",
+    tone: "自然",
+    minLength: 20,
+    maxLength: 140,
+    maxSkills: 2,
+    maxProjects: 1,
+    bannedPhrases: ["海投"],
+    version: 3
+  };
+
+  return {
+    getConfig: vi.fn(async () => config),
+    saveConfig: vi.fn(async (input: unknown) => input as never),
+    getProfile: vi.fn(async () => profile),
+    saveProfile: vi.fn(async (input: unknown) => input as never),
+    getTemplate: vi.fn(async () => template),
+    saveTemplate: vi.fn(async (input: unknown) => input as never),
+    getJobs: vi.fn(async () => jobs),
+    upsertJobs: vi.fn(async () => jobs),
+    getTasks: vi.fn(async () => [...tasks]),
+    createOrUpdateTask: vi.fn(async (input: unknown) => {
+      const task = structuredClone(input as GreetingTask);
+      const index = tasks.findIndex((item) => item.id === task.id);
+      if (index >= 0) {
+        tasks[index] = task;
+      } else {
+        tasks.unshift(task);
+      }
+      return task;
+    }),
+    approveTasks: vi.fn(async () => []),
+    rejectTasks: vi.fn(async () => []),
+    transitionTask: vi.fn(async (taskId: string, status: GreetingTask["status"], metadata?: Partial<GreetingTask>) => {
+      const index = tasks.findIndex((item) => item.id === taskId);
+      if (index < 0) {
+        throw new Error(`missing task: ${taskId}`);
+      }
+      const next = {
+        ...tasks[index],
+        ...metadata,
+        status,
+        updatedAt: FIXED_NOW
+      };
+      tasks[index] = next;
+      return next;
+    }),
+    getApprovedTasks: vi.fn(async () => tasks.filter((task) => task.status === "approved")),
+    getDailyUsage: vi.fn(async () => ({
+      date: "2026-06-20",
+      confirmedSends: 0,
+      failures: 0,
+      modelCalls: 0,
+      estimatedCostCny: 0,
+      pausedReason: "",
+      updatedAt: FIXED_NOW
+    })),
+    getDailyUsageHistory: vi.fn(async () => []),
+    incrementConfirmedSend: vi.fn(async () => ({
+      date: "2026-06-20",
+      confirmedSends: 1,
+      failures: 0,
+      modelCalls: 0,
+      estimatedCostCny: 0,
+      pausedReason: "",
+      updatedAt: FIXED_NOW
+    })),
+    appendRunLog: vi.fn(async (entry: unknown) => {
+      logs.push(entry as Record<string, unknown>);
+      return entry as never;
+    }),
+    getRunLogs: vi.fn(async () => logs as never)
+  } as PipelineStore;
+}
+
 describe("greeting pipeline", () => {
   let tempDir = "";
 
@@ -238,6 +335,37 @@ describe("greeting pipeline", () => {
         jobId: "job-hard-reject",
         status: "rejected",
         failureReason: "命中排除关键词：外包"
+      })
+    ]);
+  });
+
+  it("records missing requested job ids as failed without calling the provider", async () => {
+    const { createGreetingPipeline } = await import("@/lib/greeting-pipeline");
+    const store = await makeStore();
+    const provider = createProvider();
+
+    const result = await createGreetingPipeline({
+      store,
+      provider,
+      now: () => FIXED_NOW
+    }).run(["job-missing"]);
+
+    expect(result).toMatchObject({
+      processed: 0,
+      hardRejected: 0,
+      scoreRejected: 0,
+      pendingReview: 0,
+      failed: 1
+    });
+    expect(provider.scoreJob).not.toHaveBeenCalled();
+    expect(provider.refineGreeting).not.toHaveBeenCalled();
+
+    const logs = await store.getRunLogs();
+    expect(logs).toEqual([
+      expect.objectContaining({
+        level: "error",
+        jobId: "job-missing",
+        detail: "job_not_found"
       })
     ]);
   });
@@ -426,13 +554,14 @@ describe("greeting pipeline", () => {
 
   it("limits concurrent provider work to the configured maximum", async () => {
     const { createGreetingPipeline } = await import("@/lib/greeting-pipeline");
-    const store = await makeStore();
-    await store.upsertJobs([
+    const jobs = [
+      createJob(),
       createJob({ id: "job-2", detailUrl: "https://example.com/jobs/2" }),
       createJob({ id: "job-3", detailUrl: "https://example.com/jobs/3" }),
       createJob({ id: "job-4", detailUrl: "https://example.com/jobs/4" }),
       createJob({ id: "job-5", detailUrl: "https://example.com/jobs/5" })
-    ]);
+    ];
+    const store = createPipelineStoreStub(jobs);
 
     let active = 0;
     let maxActive = 0;
@@ -450,11 +579,95 @@ describe("greeting pipeline", () => {
       store,
       provider,
       now: () => FIXED_NOW,
-      concurrency: 3
+      concurrency: 10
     }).run();
 
-    expect(result.pendingReview).toBe(5);
+    expect(result.pendingReview).toBe(jobs.length);
     expect(maxActive).toBeLessThanOrEqual(3);
+  });
+
+  it("persists the accepted path in collected then filtered order before model work", async () => {
+    const { createGreetingPipeline } = await import("@/lib/greeting-pipeline");
+    const store = await makeStore();
+    const callOrder: string[] = [];
+    const wrappedStore = {
+      ...store,
+      createOrUpdateTask: vi.fn(async (input: unknown) => {
+        const task = input as GreetingTask;
+        callOrder.push(`create:${task.status}:${task.jobId}`);
+        return store.createOrUpdateTask(input);
+      }),
+      transitionTask: vi.fn(async (taskId: string, status: GreetingTask["status"], metadata?: unknown) => {
+        callOrder.push(`transition:${status}:${taskId}`);
+        return store.transitionTask(taskId, status, metadata as never);
+      })
+    };
+    const provider = createProvider({
+      scoreJob: vi.fn(async (input) => {
+        callOrder.push(`score:${input.job.id}`);
+        return createScoreResult();
+      })
+    });
+
+    await createGreetingPipeline({
+      store: wrappedStore as typeof store,
+      provider,
+      now: () => FIXED_NOW
+    }).run(["job-1"]);
+
+    expect(callOrder).toContain("create:collected:job-1");
+    expect(callOrder).toContain("score:job-1");
+    expect(callOrder.indexOf("create:collected:job-1")).toBeLessThan(
+      callOrder.indexOf(`transition:filtered:${(await store.getTasks())[0].id}`)
+    );
+    expect(callOrder.indexOf(`transition:filtered:${(await store.getTasks())[0].id}`)).toBeLessThan(
+      callOrder.indexOf("score:job-1")
+    );
+  });
+
+  it("persists hard rejection as collected then rejected without model work", async () => {
+    const { createGreetingPipeline } = await import("@/lib/greeting-pipeline");
+    const store = await makeStore();
+    await store.saveConfig({
+      requiredKeywords: ["SQL"],
+      excludedKeywords: ["外包"],
+      scoreThreshold: 70,
+      dailyLimit: 100
+    });
+    await store.upsertJobs([
+      createJob({
+        id: "job-hard-reject-order",
+        title: "外包数据分析师",
+        detailUrl: "https://example.com/jobs/reject-order"
+      })
+    ]);
+    const callOrder: string[] = [];
+    const wrappedStore = {
+      ...store,
+      createOrUpdateTask: vi.fn(async (input: unknown) => {
+        const task = input as GreetingTask;
+        callOrder.push(`create:${task.status}:${task.jobId}`);
+        return store.createOrUpdateTask(input);
+      }),
+      transitionTask: vi.fn(async (taskId: string, status: GreetingTask["status"], metadata?: unknown) => {
+        callOrder.push(`transition:${status}:${taskId}`);
+        return store.transitionTask(taskId, status, metadata as never);
+      })
+    };
+    const provider = createProvider();
+
+    await createGreetingPipeline({
+      store: wrappedStore as typeof store,
+      provider,
+      now: () => FIXED_NOW
+    }).run(["job-hard-reject-order"]);
+
+    const [task] = await store.getTasks();
+    expect(callOrder).toEqual([
+      `create:collected:job-hard-reject-order`,
+      `transition:rejected:${task.id}`
+    ]);
+    expect(provider.scoreJob).not.toHaveBeenCalled();
   });
 });
 

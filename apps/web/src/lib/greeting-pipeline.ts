@@ -452,7 +452,7 @@ function clampConcurrency(value: number | undefined): number {
     return 3;
   }
 
-  return Math.min(10, Math.max(1, Math.floor(value)));
+  return Math.min(3, Math.max(1, Math.floor(value)));
 }
 
 function toIsoString(input: string | Date): string {
