@@ -46,6 +46,11 @@ function createTask(overrides: Partial<GreetingTask> = {}): GreetingTask {
     usedProfileItemIds: [],
     modelProvider: "local",
     modelName: "template",
+    scoringProvider: "",
+    scoringModel: "",
+    refinementProvider: "",
+    refinementModel: "",
+    refinementFallback: false,
     templateVersion: 1,
     estimatedCostCny: 0,
     failureReason: "",
@@ -176,6 +181,48 @@ describe("domain store", () => {
       })
     );
     await expect(store.transitionTask("task-1", "approved")).rejects.toBeInstanceOf(DomainTransitionError);
+  });
+
+  it("atomically claims only one active task per job across concurrent callers", async () => {
+    const first = await makeStore();
+    const second = createDomainStore(tempDir);
+
+    const [claimedA, claimedB] = await Promise.all([
+      first.createTaskIfNoActiveJobTask(createTask({ id: "task-claim-a" })),
+      second.createTaskIfNoActiveJobTask(createTask({ id: "task-claim-b" }))
+    ]);
+
+    expect([claimedA, claimedB].filter((value) => value !== null)).toHaveLength(1);
+    await expect(first.getTasks()).resolves.toEqual([
+      expect.objectContaining({
+        jobId: "job-1",
+        status: "collected"
+      })
+    ]);
+  });
+
+  it("allows claiming a new task when the existing task for the job is terminal", async () => {
+    const store = await makeStore();
+    await store.createOrUpdateTask(createTask({ id: "task-terminal", status: "rejected" }));
+
+    const claimed = await store.createTaskIfNoActiveJobTask(
+      createTask({
+        id: "task-rerun",
+        status: "collected"
+      })
+    );
+
+    expect(claimed).toMatchObject({
+      id: "task-rerun",
+      jobId: "job-1",
+      status: "collected"
+    });
+    await expect(store.getTasks()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "task-terminal", status: "rejected" }),
+        expect.objectContaining({ id: "task-rerun", status: "collected" })
+      ])
+    );
   });
 
   it("allows quota_blocked transitions from approved and sending before returning to approved", async () => {

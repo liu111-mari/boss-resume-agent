@@ -16,6 +16,7 @@ import {
   type GreetingModelProvider,
   type ScoreJobResult
 } from "@/lib/model-provider";
+import { redactDiagnosticValue } from "@/lib/diagnostics";
 
 type DomainStoreLike = ReturnType<typeof getDomainStore>;
 
@@ -59,6 +60,15 @@ const NON_TERMINAL_TASK_STATUSES = new Set<GreetingTaskStatus>([
   "paused",
   "quota_blocked"
 ]);
+const FAILABLE_TASK_STATUSES = new Set<GreetingTaskStatus>([
+  "collected",
+  "filtered",
+  "scored",
+  "generated",
+  "sending"
+]);
+const LOCAL_FALLBACK_PROVIDER = "local";
+const LOCAL_FALLBACK_MODEL = "template";
 
 export function createGreetingPipeline(options: GreetingPipelineOptions) {
   const concurrency = clampConcurrency(options.concurrency);
@@ -147,194 +157,243 @@ async function processJob(
   job: JobCard
 ): Promise<GreetingPipelineRunCounts> {
   const counts = createEmptyCounts();
-  counts.processed = 1;
+  let task: GreetingTask | null = null;
 
-  const task = await context.store.createOrUpdateTask({
-    id: globalThis.crypto.randomUUID(),
-    jobId: job.id,
-    jobTitle: job.title,
-    company: job.company,
-    detailUrl: job.detailUrl ?? "",
-    messageDraft: "",
-    status: "collected",
-    score: undefined,
-    matchReasons: [],
-    matchedRequirements: [],
-    missingRequirements: [],
-    usedProfileItemIds: [],
-    modelProvider: "local",
-    modelName: "template",
-    templateVersion: context.template.version,
-    estimatedCostCny: 0,
-    failureReason: "",
-    createdAt: toIsoString(context.now()),
-    updatedAt: toIsoString(context.now())
-  });
-
-  await appendRunLog(context, {
-    level: "info",
-    message: "已收集岗位并创建流水线任务",
-    jobId: job.id,
-    taskId: task.id,
-    detail: "collected"
-  });
-
-  const hardFilter = evaluateJob(job, context.config);
-  if (!hardFilter.accepted) {
-    const failureReason = hardFilter.reasons[0] ?? "硬筛未通过";
-    await context.store.transitionTask(task.id, "rejected", {
-      failureReason
-    });
-    await appendRunLog(context, {
-      level: "info",
-      message: "岗位未通过硬筛",
-      jobId: job.id,
-      taskId: task.id,
-      detail: failureReason
-    });
-    counts.hardRejected += 1;
-    return counts;
-  }
-
-  await context.store.transitionTask(task.id, "filtered");
-  await appendRunLog(context, {
-    level: "info",
-    message: "岗位通过硬筛",
-    jobId: job.id,
-    taskId: task.id,
-    detail: "filtered"
-  });
-
-  let scoreResult: ScoreJobResult;
   try {
-    scoreResult = await context.provider.scoreJob({
-      job,
-      profile: context.profile,
-      keywords: context.config.requiredKeywords
+    task = await context.store.createTaskIfNoActiveJobTask({
+      id: globalThis.crypto.randomUUID(),
+      jobId: job.id,
+      jobTitle: job.title,
+      company: job.company,
+      detailUrl: job.detailUrl ?? "",
+      messageDraft: "",
+      status: "collected",
+      score: undefined,
+      matchReasons: [],
+      matchedRequirements: [],
+      missingRequirements: [],
+      usedProfileItemIds: [],
+      modelProvider: LOCAL_FALLBACK_PROVIDER,
+      modelName: LOCAL_FALLBACK_MODEL,
+      scoringProvider: "",
+      scoringModel: "",
+      refinementProvider: "",
+      refinementModel: "",
+      refinementFallback: false,
+      templateVersion: context.template.version,
+      estimatedCostCny: 0,
+      failureReason: "",
+      createdAt: toIsoString(context.now()),
+      updatedAt: toIsoString(context.now())
     });
-  } catch (error) {
-    return failTask(context, task.id, job.id, error, counts, "评分阶段失败");
-  }
 
-  const accumulatedScoreCost = roundCurrency(scoreResult.estimatedCostCny);
-  counts.estimatedCostCny += accumulatedScoreCost;
+    if (!task) {
+      await appendRunLog(context, {
+        level: "info",
+        message: "岗位已有未完成任务，已跳过",
+        jobId: job.id,
+        detail: "active_task_exists"
+      });
+      return counts;
+    }
 
-  await context.store.transitionTask(task.id, "scored", {
-    score: scoreResult.score,
-    matchedRequirements: scoreResult.matchedRequirements,
-    missingRequirements: scoreResult.missingRequirements,
-    matchReasons: scoreResult.reasons,
-    modelProvider: scoreResult.provider,
-    modelName: scoreResult.model,
-    estimatedCostCny: accumulatedScoreCost
-  });
-  await appendRunLog(context, {
-    level: "info",
-    message: "岗位完成模型评分",
-    jobId: job.id,
-    taskId: task.id,
-    detail: `score=${scoreResult.score}`
-  });
+    counts.processed = 1;
 
-  if (scoreResult.score < context.config.scoreThreshold) {
-    const failureReason = `评分低于阈值：${scoreResult.score} < ${context.config.scoreThreshold}`;
-    await context.store.transitionTask(task.id, "rejected", {
-      failureReason
+    await appendRunLog(context, {
+      level: "info",
+      message: "已收集岗位并创建流水线任务",
+      jobId: job.id,
+      taskId: task.id,
+      detail: "collected"
+    });
+
+    const hardFilter = evaluateJob(job, context.config);
+    if (!hardFilter.accepted) {
+      const failureReason = hardFilter.reasons[0] ?? "硬筛未通过";
+      task = await context.store.transitionTask(task.id, "rejected", {
+        failureReason
+      });
+      await appendRunLog(context, {
+        level: "info",
+        message: "岗位未通过硬筛",
+        jobId: job.id,
+        taskId: task.id,
+        detail: failureReason
+      });
+      counts.hardRejected += 1;
+      return counts;
+    }
+
+    task = await context.store.transitionTask(task.id, "filtered");
+    await appendRunLog(context, {
+      level: "info",
+      message: "岗位通过硬筛",
+      jobId: job.id,
+      taskId: task.id,
+      detail: "filtered"
+    });
+
+    let scoreResult: ScoreJobResult;
+    try {
+      scoreResult = await context.provider.scoreJob({
+        job,
+        profile: context.profile,
+        keywords: context.config.requiredKeywords
+      });
+    } catch (error) {
+      return failTask(context, task.id, job.id, error, counts, "评分阶段失败");
+    }
+
+    const accumulatedScoreCost = roundCurrency(scoreResult.estimatedCostCny);
+    counts.estimatedCostCny += accumulatedScoreCost;
+
+    task = await context.store.transitionTask(task.id, "scored", {
+      score: scoreResult.score,
+      matchedRequirements: scoreResult.matchedRequirements,
+      missingRequirements: scoreResult.missingRequirements,
+      matchReasons: scoreResult.reasons,
+      modelProvider: scoreResult.provider,
+      modelName: scoreResult.model,
+      scoringProvider: scoreResult.provider,
+      scoringModel: scoreResult.model,
+      refinementProvider: "",
+      refinementModel: "",
+      refinementFallback: false,
+      estimatedCostCny: accumulatedScoreCost
     });
     await appendRunLog(context, {
       level: "info",
-      message: "岗位因评分不足被拒绝",
+      message: "岗位完成模型评分",
       jobId: job.id,
       taskId: task.id,
-      detail: failureReason
+      detail: `score=${scoreResult.score}`
     });
-    counts.scoreRejected += 1;
+
+    if (scoreResult.score < context.config.scoreThreshold) {
+      const failureReason = `评分低于阈值：${scoreResult.score} < ${context.config.scoreThreshold}`;
+      task = await context.store.transitionTask(task.id, "rejected", {
+        failureReason
+      });
+      await appendRunLog(context, {
+        level: "info",
+        message: "岗位因评分不足被拒绝",
+        jobId: job.id,
+        taskId: task.id,
+        detail: failureReason
+      });
+      counts.scoreRejected += 1;
+      return finalizeCounts(counts);
+    }
+
+    const selectionKeywords = unique([
+      ...scoreResult.matchedRequirements,
+      ...context.config.requiredKeywords
+    ]);
+    const selectedItems = selectProfileItems(context.profile, selectionKeywords, {
+      maxSkills: context.template.maxSkills,
+      maxProjects: context.template.maxProjects
+    });
+    const usedProfileItemIds = collectUsedProfileItemIds(context.profile, selectedItems);
+
+    let localRendered: string;
+    try {
+      localRendered = renderGreeting({
+        template: context.template,
+        job,
+        profile: context.profile,
+        selectedItems,
+        matchedRequirements: scoreResult.matchedRequirements
+      });
+    } catch (error) {
+      return failTask(context, task.id, job.id, error, counts, "模板渲染失败");
+    }
+
+    task = await context.store.transitionTask(task.id, "generated", {
+      messageDraft: localRendered,
+      usedProfileItemIds,
+      templateVersion: context.template.version,
+      estimatedCostCny: accumulatedScoreCost
+    });
+    await appendRunLog(context, {
+      level: "info",
+      message: "已生成初始招呼语草稿",
+      jobId: job.id,
+      taskId: task.id,
+      detail: "generated"
+    });
+
+    let finalText = localRendered;
+    let finalProvider = LOCAL_FALLBACK_PROVIDER;
+    let finalModel = LOCAL_FALLBACK_MODEL;
+    let refinementProvider = LOCAL_FALLBACK_PROVIDER;
+    let refinementModel = LOCAL_FALLBACK_MODEL;
+    let refinementFallback = false;
+    let finalCost = accumulatedScoreCost;
+
+    try {
+      const refineResult = await context.provider.refineGreeting({
+        draft: localRendered,
+        job,
+        selectedProfileItems: [...selectedItems.skills, ...selectedItems.projects],
+        template: context.template
+      });
+      const refinementCost = roundCurrency(refineResult.estimatedCostCny);
+      counts.estimatedCostCny += refinementCost;
+      finalCost = roundCurrency(accumulatedScoreCost + refinementCost);
+
+      try {
+        finalText = validateGreetingText(refineResult.text, context.template);
+        finalProvider = refineResult.provider;
+        finalModel = refineResult.model;
+        refinementProvider = refineResult.provider;
+        refinementModel = refineResult.model;
+      } catch {
+        refinementFallback = true;
+        await appendRunLog(context, {
+          level: "warn",
+          message: "润色结果未通过校验，回退到本地模板草稿",
+          jobId: job.id,
+          taskId: task.id,
+          detail: "refinement_fallback"
+        });
+      }
+    } catch {
+      refinementFallback = true;
+      await appendRunLog(context, {
+        level: "warn",
+        message: "润色失败，回退到本地模板草稿",
+        jobId: job.id,
+        taskId: task.id,
+        detail: "refinement_fallback"
+      });
+    }
+
+    task = await context.store.transitionTask(task.id, "pending_review", {
+      messageDraft: finalText,
+      usedProfileItemIds,
+      modelProvider: finalProvider,
+      modelName: finalModel,
+      scoringProvider: scoreResult.provider,
+      scoringModel: scoreResult.model,
+      refinementProvider,
+      refinementModel,
+      refinementFallback,
+      templateVersion: context.template.version,
+      estimatedCostCny: finalCost
+    });
+    await appendRunLog(context, {
+      level: "info",
+      message: "已生成待审核招呼语",
+      jobId: job.id,
+      taskId: task.id,
+      detail: "pending_review"
+    });
+
+    counts.pendingReview += 1;
     return finalizeCounts(counts);
-  }
-
-  const selectionKeywords = unique([
-    ...scoreResult.matchedRequirements,
-    ...context.config.requiredKeywords
-  ]);
-  const selectedItems = selectProfileItems(context.profile, selectionKeywords, {
-    maxSkills: context.template.maxSkills,
-    maxProjects: context.template.maxProjects
-  });
-  const usedProfileItemIds = collectUsedProfileItemIds(context.profile, selectedItems);
-
-  let localRendered: string;
-  try {
-    localRendered = renderGreeting({
-      template: context.template,
-      job,
-      profile: context.profile,
-      selectedItems,
-      matchedRequirements: scoreResult.matchedRequirements
-    });
   } catch (error) {
-    return failTask(context, task.id, job.id, error, counts, "模板渲染失败");
+    return handleUnexpectedJobError(context, job, task, error, counts);
   }
-
-  await context.store.transitionTask(task.id, "generated", {
-    messageDraft: localRendered,
-    usedProfileItemIds,
-    templateVersion: context.template.version,
-    estimatedCostCny: accumulatedScoreCost
-  });
-  await appendRunLog(context, {
-    level: "info",
-    message: "已生成初始招呼语草稿",
-    jobId: job.id,
-    taskId: task.id,
-    detail: "generated"
-  });
-
-  let finalText = localRendered;
-  let finalProvider = scoreResult.provider;
-  let finalModel = scoreResult.model;
-  let finalCost = accumulatedScoreCost;
-
-  try {
-    const refineResult = await context.provider.refineGreeting({
-      draft: localRendered,
-      job,
-      selectedProfileItems: [...selectedItems.skills, ...selectedItems.projects],
-      template: context.template
-    });
-    finalText = validateGreetingText(refineResult.text, context.template);
-    finalProvider = refineResult.provider;
-    finalModel = refineResult.model;
-    finalCost = roundCurrency(accumulatedScoreCost + refineResult.estimatedCostCny);
-    counts.estimatedCostCny += roundCurrency(refineResult.estimatedCostCny);
-  } catch (error) {
-    await appendRunLog(context, {
-      level: "warn",
-      message: "润色失败，回退到本地模板草稿",
-      jobId: job.id,
-      taskId: task.id,
-      detail: "refinement_fallback"
-    });
-    void error;
-  }
-
-  await context.store.transitionTask(task.id, "pending_review", {
-    messageDraft: finalText,
-    usedProfileItemIds,
-    modelProvider: finalProvider,
-    modelName: finalModel,
-    templateVersion: context.template.version,
-    estimatedCostCny: finalCost
-  });
-  await appendRunLog(context, {
-    level: "info",
-    message: "已生成待审核招呼语",
-    jobId: job.id,
-    taskId: task.id,
-    detail: "pending_review"
-  });
-
-  counts.pendingReview += 1;
-  return finalizeCounts(counts);
 }
 
 async function failTask(
@@ -345,7 +404,7 @@ async function failTask(
   counts: GreetingPipelineRunCounts,
   message: string
 ): Promise<GreetingPipelineRunCounts> {
-  const failureReason = toErrorMessage(error);
+  const failureReason = safeErrorDetail(error);
   await context.store.transitionTask(taskId, "failed", {
     failureReason
   });
@@ -357,6 +416,41 @@ async function failTask(
     detail: failureReason
   });
   counts.failed += 1;
+  return finalizeCounts(counts);
+}
+
+async function handleUnexpectedJobError(
+  context: GreetingPipelineContext,
+  job: JobCard,
+  task: GreetingTask | null,
+  error: unknown,
+  counts: GreetingPipelineRunCounts
+): Promise<GreetingPipelineRunCounts> {
+  const detail = safeErrorDetail(error);
+  counts.failed += 1;
+
+  if (task && FAILABLE_TASK_STATUSES.has(task.status)) {
+    try {
+      await context.store.transitionTask(task.id, "failed", {
+        failureReason: detail
+      });
+    } catch {
+      // best effort only
+    }
+  }
+
+  try {
+    await appendRunLog(context, {
+      level: "error",
+      message: "岗位处理异常，已隔离并继续后续岗位",
+      jobId: job.id,
+      taskId: task?.id,
+      detail
+    });
+  } catch {
+    // best effort only
+  }
+
   return finalizeCounts(counts);
 }
 
@@ -467,6 +561,20 @@ function roundCurrency(value: number): number {
   return Number(value.toFixed(4));
 }
 
-function toErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : "未知错误";
+function safeErrorDetail(error: unknown): string {
+  const message = error instanceof Error ? error.message : "未知错误";
+  const redactedMessage = redactDiagnosticValue({ message });
+  const raw =
+    redactedMessage &&
+    typeof redactedMessage === "object" &&
+    "message" in redactedMessage &&
+    typeof redactedMessage.message === "string"
+      ? redactedMessage.message
+      : "未知错误";
+
+  return raw
+    .replace(/Bearer\s+[^\s]+/gi, "Bearer [REDACTED]")
+    .replace(/\bsk-[A-Za-z0-9_-]+\b/g, "[REDACTED]")
+    .replace(/api_key\s*=\s*([^\s&]+)/gi, "api_key=[REDACTED]")
+    .slice(0, 500);
 }

@@ -95,6 +95,41 @@ describe("shared greeting automation domain schemas", () => {
 
     expect(result.status).toBe("pending_review");
     expect(result.updatedAt).toBe("2026-06-18T08:05:00.000Z");
+    expect(result.refinementFallback).toBe(false);
+    expect(result.scoringProvider).toBe("");
+    expect(result.scoringModel).toBe("");
+    expect(result.refinementProvider).toBe("");
+    expect(result.refinementModel).toBe("");
+  });
+
+  it("parses explicit scoring and refinement audit fields", () => {
+    const result = greetingTaskSchema.parse({
+      id: "task-audit",
+      jobId: "job-audit",
+      jobTitle: "数据分析师",
+      company: "示例科技",
+      messageDraft: "你好，我对这个岗位很感兴趣。",
+      status: "pending_review",
+      modelProvider: "local",
+      modelName: "template",
+      scoringProvider: "deepseek",
+      scoringModel: "deepseek-chat",
+      refinementProvider: "local",
+      refinementModel: "template",
+      refinementFallback: true,
+      createdAt: "2026-06-18T08:00:00.000Z",
+      updatedAt: "2026-06-18T08:05:00.000Z"
+    });
+
+    expect(result).toMatchObject({
+      modelProvider: "local",
+      modelName: "template",
+      scoringProvider: "deepseek",
+      scoringModel: "deepseek-chat",
+      refinementProvider: "local",
+      refinementModel: "template",
+      refinementFallback: true
+    });
   });
 
   it("rejects the legacy draft greeting task status", () => {

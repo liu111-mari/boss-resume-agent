@@ -69,6 +69,17 @@ const taskTransitionMap: Record<GreetingTaskStatus, readonly GreetingTaskStatus[
   rejected: [],
   failed: []
 };
+const defaultNonTerminalTaskStatuses = [
+  "collected",
+  "filtered",
+  "scored",
+  "generated",
+  "pending_review",
+  "approved",
+  "sending",
+  "paused",
+  "quota_blocked"
+] as const satisfies readonly GreetingTaskStatus[];
 
 export type RunLogEntry = z.infer<typeof runLogEntrySchema>;
 export type DailyUsage = z.infer<typeof dailyUsageSchema>;
@@ -219,6 +230,31 @@ export function createDomainStore(
     });
   }
 
+  async function createTaskIfNoActiveJobTask(
+    input: unknown,
+    nonTerminalStatuses: readonly GreetingTaskStatus[] = defaultNonTerminalTaskStatuses
+  ): Promise<GreetingTask | null> {
+    return queueMutation("tasks", async () => {
+      const parsed = greetingTaskSchema.parse(input);
+      const tasks = await repositories.tasks.read();
+      const hasActiveJobTask = tasks.some(
+        (task) => task.jobId === parsed.jobId && nonTerminalStatuses.includes(task.status)
+      );
+      if (hasActiveJobTask) {
+        return null;
+      }
+
+      const existingIndex = tasks.findIndex((task) => task.id === parsed.id);
+      if (existingIndex >= 0) {
+        throw new Error(`task already exists: ${parsed.id}`);
+      }
+
+      tasks.unshift(parsed);
+      await repositories.tasks.write(tasks);
+      return parsed;
+    });
+  }
+
   async function transitionTask(
     taskId: string,
     to: GreetingTaskStatus,
@@ -323,6 +359,7 @@ export function createDomainStore(
     upsertJobs,
     getTasks,
     createOrUpdateTask,
+    createTaskIfNoActiveJobTask,
     approveTasks,
     rejectTasks,
     transitionTask,

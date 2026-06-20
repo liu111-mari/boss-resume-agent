@@ -106,6 +106,11 @@ function createTask(overrides: Partial<GreetingTask> = {}): GreetingTask {
     usedProfileItemIds: [],
     modelProvider: "local",
     modelName: "template",
+    scoringProvider: "",
+    scoringModel: "",
+    refinementProvider: "",
+    refinementModel: "",
+    refinementFallback: false,
     templateVersion: 1,
     estimatedCostCny: 0,
     failureReason: "",
@@ -208,6 +213,19 @@ function createPipelineStoreStub(jobs: JobCard[]): PipelineStore {
       } else {
         tasks.unshift(task);
       }
+      return task;
+    }),
+    createTaskIfNoActiveJobTask: vi.fn(async (input: unknown) => {
+      const task = structuredClone(input as GreetingTask);
+      const hasActive = tasks.some(
+        (item) =>
+          item.jobId === task.jobId &&
+          ["collected", "filtered", "scored", "generated", "pending_review", "approved", "sending", "paused", "quota_blocked"].includes(item.status)
+      );
+      if (hasActive) {
+        return null;
+      }
+      tasks.unshift(task);
       return task;
     }),
     approveTasks: vi.fn(async () => []),
@@ -437,6 +455,11 @@ describe("greeting pipeline", () => {
       usedProfileItemIds: ["intro-1", "skill-sql", "skill-python", "project-sql"],
       modelProvider: "refine-provider",
       modelName: "refine-model",
+      scoringProvider: "score-provider",
+      scoringModel: "score-model",
+      refinementProvider: "refine-provider",
+      refinementModel: "refine-model",
+      refinementFallback: false,
       templateVersion: 3,
       estimatedCostCny: 0.35,
       messageDraft: createRefineResult().text
@@ -465,8 +488,13 @@ describe("greeting pipeline", () => {
 
     const [task] = await store.getTasks();
     expect(task.status).toBe("pending_review");
-    expect(task.modelProvider).toBe("score-provider");
-    expect(task.modelName).toBe("score-model");
+    expect(task.modelProvider).toBe("local");
+    expect(task.modelName).toBe("template");
+    expect(task.scoringProvider).toBe("score-provider");
+    expect(task.scoringModel).toBe("score-model");
+    expect(task.refinementProvider).toBe("local");
+    expect(task.refinementModel).toBe("template");
+    expect(task.refinementFallback).toBe(true);
     expect(task.messageDraft).toContain("你好，我是复旦大学信息管理学生");
 
     const logs = await store.getRunLogs();
@@ -552,6 +580,166 @@ describe("greeting pipeline", () => {
     ]);
   });
 
+  it("retains refine cost when refinement output fails validation and falls back locally", async () => {
+    const { createGreetingPipeline } = await import("@/lib/greeting-pipeline");
+    const store = await makeStore();
+    const provider = createProvider({
+      refineGreeting: vi.fn(async () =>
+        createRefineResult({
+          text: "海投".repeat(80),
+          estimatedCostCny: 0.23
+        })
+      )
+    });
+
+    const result = await createGreetingPipeline({
+      store,
+      provider,
+      now: () => FIXED_NOW
+    }).run();
+
+    expect(result).toMatchObject({
+      failed: 0,
+      pendingReview: 1,
+      estimatedCostCny: 0.35
+    });
+
+    const [task] = await store.getTasks();
+    expect(task).toMatchObject({
+      status: "pending_review",
+      estimatedCostCny: 0.35,
+      modelProvider: "local",
+      modelName: "template",
+      scoringProvider: "score-provider",
+      scoringModel: "score-model",
+      refinementProvider: "local",
+      refinementModel: "template",
+      refinementFallback: true
+    });
+    expect(task.messageDraft).toContain("你好，我是复旦大学信息管理学生");
+  });
+
+  it("claims a real store job atomically so concurrent pipeline runs only process it once", async () => {
+    const { createGreetingPipeline } = await import("@/lib/greeting-pipeline");
+    const store = await makeStore();
+    let scoreCalls = 0;
+    const provider = createProvider({
+      scoreJob: vi.fn(async () => {
+        scoreCalls += 1;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+        return createScoreResult();
+      })
+    });
+
+    const [first, second] = await Promise.all([
+      createGreetingPipeline({
+        store,
+        provider,
+        now: () => FIXED_NOW
+      }).run(["job-1"]),
+      createGreetingPipeline({
+        store,
+        provider,
+        now: () => FIXED_NOW
+      }).run(["job-1"])
+    ]);
+
+    expect(first.pendingReview + second.pendingReview).toBe(1);
+    expect(scoreCalls).toBeLessThanOrEqual(1);
+
+    const tasks = await store.getTasks();
+    expect(tasks.filter((task) => task.jobId === "job-1" && task.status === "pending_review")).toHaveLength(1);
+    expect(tasks.filter((task) => task.jobId === "job-1" && task.status !== "rejected" && task.status !== "failed" && task.status !== "sent")).toHaveLength(1);
+  });
+
+  it("isolates unexpected per-job transition failures and continues other jobs", async () => {
+    const { createGreetingPipeline } = await import("@/lib/greeting-pipeline");
+    const store = await makeStore();
+    await store.upsertJobs([
+      createJob({ id: "job-2", detailUrl: "https://example.com/jobs/2" })
+    ]);
+
+    const createdTaskIdsByJob = new Map<string, string>();
+    let injectedFailure = false;
+    const wrappedStore = {
+      ...store,
+      createTaskIfNoActiveJobTask: vi.fn(async (input: unknown) => {
+        const task = input as GreetingTask;
+        const created = await store.createTaskIfNoActiveJobTask(input);
+        if (created) {
+          createdTaskIdsByJob.set(task.jobId, created.id);
+        }
+        return created;
+      }),
+      transitionTask: vi.fn(async (taskId: string, status: GreetingTask["status"], metadata?: unknown) => {
+        if (!injectedFailure && taskId === createdTaskIdsByJob.get("job-1") && status === "filtered") {
+          injectedFailure = true;
+          throw new Error("transition boom");
+        }
+        return store.transitionTask(taskId, status, metadata as never);
+      })
+    };
+    const provider = createProvider();
+
+    const result = await createGreetingPipeline({
+      store: wrappedStore as typeof store,
+      provider,
+      now: () => FIXED_NOW
+    }).run(["job-1", "job-2"]);
+
+    expect(result).toMatchObject({
+      failed: 1,
+      pendingReview: 1
+    });
+
+    const tasks = await store.getTasks();
+    expect(tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ jobId: "job-2", status: "pending_review" })
+      ])
+    );
+    expect(tasks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ jobId: "job-1", status: expect.stringMatching(/collected|failed/) })
+      ])
+    );
+
+    const logs = await store.getRunLogs();
+    expect(logs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          level: "error",
+          jobId: "job-1"
+        })
+      ])
+    );
+  });
+
+  it("redacts sensitive error details before writing logs", async () => {
+    const { createGreetingPipeline } = await import("@/lib/greeting-pipeline");
+    const store = await makeStore();
+    const provider = createProvider({
+      scoreJob: vi.fn(async () => {
+        throw new Error("Bearer secret-token sk-live-secret api_key=hunter2");
+      })
+    });
+
+    const result = await createGreetingPipeline({
+      store,
+      provider,
+      now: () => FIXED_NOW
+    }).run();
+
+    expect(result.failed).toBe(1);
+
+    const logs = await store.getRunLogs();
+    const errorLog = logs.find((entry) => entry.level === "error");
+    expect(errorLog?.detail).toBeDefined();
+    expect(errorLog?.detail).not.toContain("secret-token");
+    expect(errorLog?.detail).not.toContain("sk-live-secret");
+    expect(errorLog?.detail).not.toContain("hunter2");
+  });
+
   it("limits concurrent provider work to the configured maximum", async () => {
     const { createGreetingPipeline } = await import("@/lib/greeting-pipeline");
     const jobs = [
@@ -592,10 +780,10 @@ describe("greeting pipeline", () => {
     const callOrder: string[] = [];
     const wrappedStore = {
       ...store,
-      createOrUpdateTask: vi.fn(async (input: unknown) => {
+      createTaskIfNoActiveJobTask: vi.fn(async (input: unknown) => {
         const task = input as GreetingTask;
         callOrder.push(`create:${task.status}:${task.jobId}`);
-        return store.createOrUpdateTask(input);
+        return store.createTaskIfNoActiveJobTask(input);
       }),
       transitionTask: vi.fn(async (taskId: string, status: GreetingTask["status"], metadata?: unknown) => {
         callOrder.push(`transition:${status}:${taskId}`);
@@ -644,10 +832,10 @@ describe("greeting pipeline", () => {
     const callOrder: string[] = [];
     const wrappedStore = {
       ...store,
-      createOrUpdateTask: vi.fn(async (input: unknown) => {
+      createTaskIfNoActiveJobTask: vi.fn(async (input: unknown) => {
         const task = input as GreetingTask;
         callOrder.push(`create:${task.status}:${task.jobId}`);
-        return store.createOrUpdateTask(input);
+        return store.createTaskIfNoActiveJobTask(input);
       }),
       transitionTask: vi.fn(async (taskId: string, status: GreetingTask["status"], metadata?: unknown) => {
         callOrder.push(`transition:${status}:${taskId}`);
