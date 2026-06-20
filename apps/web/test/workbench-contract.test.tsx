@@ -112,6 +112,8 @@ describe("greeting workbench contract", () => {
     expect(html).not.toContain("生成简历");
     expect(html).not.toContain("下载 DOCX");
     expect(html).not.toContain("消息线索");
+    expect(html).not.toContain("全部刷新");
+    expect(html).toContain("刷新运行数据");
   });
 
   it("renders accessible form labels for the main workbench inputs", () => {
@@ -173,9 +175,13 @@ describe("greeting workbench contract", () => {
     expect(html).toContain("textarea");
   });
 
-  it("uses local save callbacks and separates full refresh from operational refresh", () => {
-    expect(pageSource).toContain("const refreshAllData = useCallback");
+  it("uses local save callbacks and keeps manual refresh scoped to operational data", () => {
+    expect(pageSource).toContain("async function loadInitialData()");
     expect(pageSource).toContain("const refreshOperationalData = useCallback");
+    expect(pageSource).not.toContain("const refreshAllData = useCallback");
+    expect(pageSource).not.toContain("全部刷新");
+    expect(pageSource).toContain("刷新运行数据");
+    expect(pageSource).toMatch(/onClick=\{\(\) => void refreshOperationalData\(\)\}/);
 
     expect(pageSource).toMatch(/<FilterSettings[\s\S]*onSaved=/);
     expect(pageSource).toMatch(/<ProfileEditor[\s\S]*onSaved=/);

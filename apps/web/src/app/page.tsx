@@ -102,23 +102,6 @@ export default function Home() {
     }
   }, []);
 
-  const refreshAllData = useCallback(async () => {
-    setIsRefreshing(true);
-    try {
-      const data = await loadWorkbenchData();
-      applyWorkbenchData(data, setConfig, setProfile, setTemplate, setTasks, setJobsCount, setRunSummary, setDraftEdits);
-      setServiceHealthy(true);
-      setErrorMessage("");
-      setStatusMessage("工作台数据已同步。");
-    } catch (error) {
-      setServiceHealthy(false);
-      setErrorMessage(getErrorMessage(error));
-      setStatusMessage("工作台同步失败。");
-    } finally {
-      setIsRefreshing(false);
-    }
-  }, []);
-
   useEffect(() => {
     let isActive = true;
 
@@ -223,8 +206,8 @@ export default function Home() {
             <p>真实功能优先：筛选、素材、模板、审批、运行状态。</p>
           </div>
           <div className="topbar-status-group">
-            <button className="button button-secondary" onClick={() => void refreshAllData()} type="button">
-              全部刷新
+            <button className="button button-secondary" onClick={() => void refreshOperationalData()} type="button">
+              刷新运行数据
             </button>
             <span aria-live="polite" className="status-text">
               {serviceHealthy ? "本地服务正常" : "等待服务确认"}
