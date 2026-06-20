@@ -1,4 +1,4 @@
-import type { FilterConfig, JobCard } from "./index.js";
+import type { FilterConfig, JobCard } from "./index";
 
 export type HardFilterResult = {
   accepted: boolean;

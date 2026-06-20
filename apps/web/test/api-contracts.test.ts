@@ -438,13 +438,32 @@ describe("persistent greeting automation API contracts", () => {
     });
   });
 
-  it("keeps the removed conversations route JSON-safe for the current page", async () => {
-    const conversationsRoute = await import("@/app/api/conversations/route");
+  it("rejects selected pending-review tasks through the dedicated reject route", async () => {
+    const tasksRoute = await import("@/app/api/tasks/route");
+    const rejectRoute = await import("@/app/api/tasks/reject/route");
 
-    const response = await conversationsRoute.GET();
-    expect(response.status).toBe(410);
+    const createResponse = await tasksRoute.POST(
+      jsonRequest("/api/tasks", "POST", {
+        task: createTask({ id: "task-reject-me", status: "pending_review" })
+      })
+    );
+    expect(createResponse.status).toBe(200);
+
+    const response = await rejectRoute.POST(
+      jsonRequest("/api/tasks/reject", "POST", {
+        taskIds: ["task-reject-me"],
+        reason: "人工拒绝"
+      })
+    );
+    expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      error: "removed"
+      tasks: [
+        expect.objectContaining({
+          id: "task-reject-me",
+          status: "rejected",
+          failureReason: "人工拒绝"
+        })
+      ]
     });
   });
 });

@@ -1,4 +1,4 @@
-import type { GreetingTemplate, JobCard, Profile, ProfileItem } from "./index.js";
+import type { GreetingTemplate, JobCard, Profile, ProfileItem } from "./index";
 
 export type SelectedProfileItems = {
   skills: ProfileItem[];
