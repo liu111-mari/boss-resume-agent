@@ -1,9 +1,17 @@
-import { describe, expect, it, vi } from "vitest";
+import {
+  createServer,
+  type IncomingMessage,
+  type Server,
+  type ServerResponse
+} from "node:http";
+
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { GreetingTemplate, JobCard, Profile, ProfileItem } from "@boss-agent/shared";
 
 import {
   ModelFactGuardError,
+  ModelRequestError,
   createConfiguredProvider,
   createDeepSeekGreetingModelProvider
 } from "@/lib/model-provider";
@@ -104,6 +112,42 @@ function jsonResponse(body: unknown, status = 200): Response {
     }
   });
 }
+
+async function startJsonServer(
+  handler: (request: IncomingMessage, response: ServerResponse<IncomingMessage>) => void
+): Promise<{ server: Server; baseUrl: string }> {
+  const server = createServer(handler);
+
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => resolve());
+  });
+
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("Expected an ephemeral TCP port");
+  }
+
+  return {
+    server,
+    baseUrl: `http://127.0.0.1:${address.port}`
+  };
+}
+
+async function closeServer(server: Server): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => {
+      if (error) reject(error);
+      else resolve();
+    });
+  });
+}
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("createDeepSeekGreetingModelProvider", () => {
   it("uses structured DeepSeek output for scoring and sends the expected request", async () => {
@@ -299,6 +343,66 @@ describe("createDeepSeekGreetingModelProvider", () => {
     ).rejects.toBeInstanceOf(ModelFactGuardError);
   });
 
+  it("allows company and job title facts from the job even when they are not in personal facts", async () => {
+    const provider = createDeepSeekGreetingModelProvider({
+      apiKey: "test-key",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-chat",
+      request: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                text: "你好，我对示例科技的数据分析师岗位很感兴趣。我熟悉 SQL 和 Python 数据分析，也做过经营分析看板项目。",
+                usedProfileItemIds: ["skill-sql", "project-dashboard"]
+              })
+            }
+          }
+        ]
+      })
+    });
+
+    await expect(
+      provider.refineGreeting({
+        draft: "你好，我想应聘这个岗位。我熟悉 SQL 和 Python 数据分析，也做过经营分析看板项目。",
+        job: createJob(),
+        selectedProfileItems: selectedProfileItems(),
+        template: createTemplate()
+      })
+    ).resolves.toMatchObject({
+      text: "你好，我对示例科技的数据分析师岗位很感兴趣。我熟悉 SQL 和 Python 数据分析，也做过经营分析看板项目。"
+    });
+  });
+
+  it("rejects usedProfileItemIds outside the selected subset", async () => {
+    const provider = createDeepSeekGreetingModelProvider({
+      apiKey: "test-key",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-chat",
+      request: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                text: "你好，我熟悉 SQL 和 Python 数据分析，也做过经营分析看板项目。",
+                usedProfileItemIds: ["skill-sql", "intro-unknown"]
+              })
+            }
+          }
+        ]
+      })
+    });
+
+    await expect(
+      provider.refineGreeting({
+        draft: "你好，我熟悉 SQL 和 Python 数据分析，也做过经营分析看板项目。",
+        job: createJob(),
+        selectedProfileItems: selectedProfileItems(),
+        template: createTemplate()
+      })
+    ).rejects.toBeInstanceOf(ModelFactGuardError);
+  });
+
   it("accepts a normal refinement and returns usage metadata", async () => {
     const provider = createDeepSeekGreetingModelProvider({
       apiKey: "test-key",
@@ -399,5 +503,175 @@ describe("createConfiguredProvider", () => {
       model: "template",
       estimatedCostCny: 0
     });
+  });
+
+  it("falls back to default prices when env values are NaN, Infinity, or negative", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  score: 80,
+                  matchedRequirements: ["SQL"],
+                  missingRequirements: [],
+                  reasons: ["匹配"],
+                  recommendedProfileFields: ["skill-sql"]
+                })
+              }
+            }
+          ],
+          usage: {
+            prompt_tokens: 1_000_000,
+            completion_tokens: 1_000_000,
+            total_tokens: 2_000_000
+          }
+        })
+      )
+    );
+
+    const provider = createConfiguredProvider({
+      GREETING_MODEL_PROVIDER: "deepseek",
+      GREETING_MODEL_API_KEY: "test-key",
+      GREETING_MODEL_BASE_URL: "https://api.deepseek.com",
+      GREETING_MODEL_NAME: "deepseek-chat",
+      GREETING_MODEL_INPUT_CNY_PER_MILLION: "NaN",
+      GREETING_MODEL_OUTPUT_CNY_PER_MILLION: "Infinity"
+    });
+
+    const result = await provider.scoreJob({
+      job: createJob(),
+      profile: createProfile(),
+      keywords: ["SQL"]
+    });
+
+    expect(result.estimatedCostCny).toBe(10);
+
+    const providerWithNegative = createConfiguredProvider({
+      GREETING_MODEL_PROVIDER: "deepseek",
+      GREETING_MODEL_API_KEY: "test-key",
+      GREETING_MODEL_BASE_URL: "https://api.deepseek.com",
+      GREETING_MODEL_NAME: "deepseek-chat",
+      GREETING_MODEL_INPUT_CNY_PER_MILLION: "-1",
+      GREETING_MODEL_OUTPUT_CNY_PER_MILLION: "-8"
+    });
+
+    const negativeResult = await providerWithNegative.scoreJob({
+      job: createJob(),
+      profile: createProfile(),
+      keywords: ["SQL"]
+    });
+
+    expect(negativeResult.estimatedCostCny).toBe(10);
+  });
+});
+
+describe("createDeepSeekGreetingModelProvider with real fetch", () => {
+  it("times out through the real fetch AbortController integration", async () => {
+    const { server, baseUrl } = await startJsonServer((_request, response) => {
+      setTimeout(() => {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    score: 81,
+                    matchedRequirements: ["SQL"],
+                    missingRequirements: [],
+                    reasons: ["匹配"],
+                    recommendedProfileFields: ["skill-sql"]
+                  })
+                }
+              }
+            ]
+          })
+        );
+      }, 200);
+    });
+
+    try {
+      const provider = createDeepSeekGreetingModelProvider({
+        apiKey: "test-key",
+        baseUrl,
+        model: "deepseek-chat",
+        timeoutMs: 40
+      });
+
+      await expect(
+        provider.scoreJob({
+          job: createJob(),
+          profile: createProfile(),
+          keywords: ["SQL"]
+        })
+      ).rejects.toBeInstanceOf(ModelRequestError);
+
+      await expect(
+        provider.scoreJob({
+          job: createJob(),
+          profile: createProfile(),
+          keywords: ["SQL"]
+        })
+      ).rejects.toThrow(/timed out/i);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("parses a real Response.json payload from a local server", async () => {
+    const { server, baseUrl } = await startJsonServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  score: 88,
+                  matchedRequirements: ["SQL"],
+                  missingRequirements: ["Tableau"],
+                  reasons: ["本地服务返回成功"],
+                  recommendedProfileFields: ["skill-sql"]
+                })
+              }
+            }
+          ],
+          usage: {
+            prompt_tokens: 200,
+            completion_tokens: 50,
+            total_tokens: 250
+          }
+        })
+      );
+    });
+
+    try {
+      const provider = createDeepSeekGreetingModelProvider({
+        apiKey: "test-key",
+        baseUrl,
+        model: "deepseek-chat"
+      });
+
+      await expect(
+        provider.scoreJob({
+          job: createJob(),
+          profile: createProfile(),
+          keywords: ["SQL", "Tableau"]
+        })
+      ).resolves.toMatchObject({
+        score: 88,
+        matchedRequirements: ["SQL"],
+        missingRequirements: ["Tableau"],
+        reasons: ["本地服务返回成功"],
+        recommendedProfileFields: ["skill-sql"],
+        provider: "deepseek",
+        model: "deepseek-chat"
+      });
+    } finally {
+      await closeServer(server);
+    }
   });
 });

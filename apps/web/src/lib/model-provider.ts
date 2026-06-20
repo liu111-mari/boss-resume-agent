@@ -46,11 +46,24 @@ export interface GreetingModelProvider {
   refineGreeting(input: RefineGreetingInput): Promise<RefineGreetingResult>;
 }
 
+export type DeepSeekRawResponse = {
+  choices: Array<{
+    message: {
+      content: string;
+    };
+  }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    total_tokens?: number;
+  };
+};
+
 type DeepSeekRequest = (
   url: string,
   init: RequestInit,
   signal: AbortSignal
-) => Promise<unknown>;
+) => Promise<Response | DeepSeekRawResponse>;
 
 type PriceConfig = {
   inputCnyPerMillion: number;
@@ -113,6 +126,13 @@ export class ModelFactGuardError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ModelFactGuardError";
+  }
+}
+
+export class ModelRequestError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ModelRequestError";
   }
 }
 
@@ -288,7 +308,7 @@ async function defaultRequest(
   url: string,
   init: RequestInit,
   signal: AbortSignal
-): Promise<unknown> {
+): Promise<Response> {
   return fetch(url, { ...init, signal });
 }
 
@@ -339,7 +359,13 @@ async function invokeDeepSeek(
     return outerResponseSchema.parse(payload);
   } catch (error) {
     if (controller.signal.aborted) {
-      throw new Error(`DeepSeek request timed out after ${input.timeoutMs}ms`);
+      throw new ModelRequestError(`DeepSeek request timed out after ${input.timeoutMs}ms`, {
+        cause: error
+      });
+    }
+
+    if (error instanceof ModelRequestError) {
+      throw error;
     }
 
     throw error;
@@ -348,29 +374,16 @@ async function invokeDeepSeek(
   }
 }
 
-async function readJsonPayload(response: unknown): Promise<unknown> {
-  if (isResponseLike(response)) {
+async function readJsonPayload(response: Response | DeepSeekRawResponse): Promise<unknown> {
+  if (response instanceof Response) {
     if (!response.ok) {
-      throw new Error(`DeepSeek request failed with status ${response.status}`);
+      throw new ModelRequestError(`DeepSeek request failed with status ${response.status}`);
     }
 
     return response.json();
   }
 
   return response;
-}
-
-function isResponseLike(
-  value: unknown
-): value is Pick<Response, "ok" | "status" | "json"> {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    "status" in value &&
-    "ok" in value &&
-    "json" in value &&
-    typeof (value as { json?: unknown }).json === "function"
-  );
 }
 
 function parseModelContent<T extends z.ZodTypeAny>(
@@ -409,11 +422,17 @@ function mapUsage(
 function estimateCostCny(usage: ModelUsage | undefined, prices: PriceConfig): number {
   if (!usage) return 0;
 
+  const inputPrice = Number.isFinite(prices.inputCnyPerMillion)
+    ? prices.inputCnyPerMillion
+    : 0;
+  const outputPrice = Number.isFinite(prices.outputCnyPerMillion)
+    ? prices.outputCnyPerMillion
+    : 0;
   const total =
-    (usage.promptTokens / 1_000_000) * prices.inputCnyPerMillion +
-    (usage.completionTokens / 1_000_000) * prices.outputCnyPerMillion;
+    (usage.promptTokens / 1_000_000) * inputPrice +
+    (usage.completionTokens / 1_000_000) * outputPrice;
 
-  return Number(total.toFixed(8));
+  return Number.isFinite(total) ? Number(total.toFixed(8)) : 0;
 }
 
 function buildScorePrompt(input: ScoreJobInput): string {
@@ -492,29 +511,34 @@ function validateUsedProfileItemIds(ids: string[], selectedItems: ProfileItem[])
 }
 
 function assertNoUnknownFacts(text: string, input: RefineGreetingInput) {
-  const allowedSource = normalizeForMatch(
+  const allowedPersonalFacts = normalizeForMatch(
     [input.draft, ...input.selectedProfileItems.map((item) => item.content)].join(" ")
   );
-  const findings = collectGuardFindings(text);
-  const unknownFacts = unique(
-    findings.filter((fragment) => !allowedSource.includes(normalizeForMatch(fragment)))
+  const textWithoutAllowedJobFacts = stripAllowedJobFacts(text, input);
+  const unknownPersonalFacts = unique(
+    collectPersonalFactFindings(textWithoutAllowedJobFacts).filter(
+      (fragment) => !allowedPersonalFacts.includes(normalizeForMatch(fragment))
+    )
   );
 
-  if (unknownFacts.length > 0) {
+  if (unknownPersonalFacts.length > 0) {
     throw new ModelFactGuardError(
-      `Refinement introduced unsupported facts: ${unknownFacts.join(" | ")}`
+      `Refinement introduced unsupported facts: ${unknownPersonalFacts.join(" | ")}`
     );
   }
 }
 
-function collectGuardFindings(text: string): string[] {
+// This is a high-risk mechanical guard for obvious hard facts only.
+// It reduces hallucination risk, but it does not replace semantic review.
+function collectPersonalFactFindings(text: string): string[] {
   const patterns = [
     /\d+(?:\.\d+)?%/g,
     /\b\d+(?:\.\d+)?\b/g,
+    /(?:约|近|超|超出)?\d+(?:\.\d+)?(?:元|万元|万|k|K|w|W)/g,
     /[\u4e00-\u9fa5A-Za-z]{2,}(?:大学|学院|学校)/g,
     /[\u4e00-\u9fa5A-Za-z]{2,}专业/g,
     /20\d{2}(?:届|年)?/g,
-    /[\u4e00-\u9fa5A-Za-z]{2,}(?:公司|科技|集团|银行|证券|咨询)/g
+    /[\u4e00-\u9fa5A-Za-z]{2,}(?:证书)/g
   ];
   const certificateKeywords = [
     "证书",
@@ -542,6 +566,25 @@ function collectGuardFindings(text: string): string[] {
   return findings;
 }
 
+function stripAllowedJobFacts(text: string, input: RefineGreetingInput): string {
+  const allowedJobFacts = unique([
+    input.job.company,
+    input.job.title,
+    `${input.job.title}岗位`,
+    `${input.job.title}职位`,
+    input.draft
+  ])
+    .filter((fact) => fact.trim().length > 0)
+    .sort((left, right) => right.length - left.length);
+  let output = text;
+
+  for (const fact of allowedJobFacts) {
+    output = output.replaceAll(fact, " ");
+  }
+
+  return output;
+}
+
 function countOverlappingKeywords(
   source: string,
   keywords: string[],
@@ -565,7 +608,7 @@ function readNonNegativeNumber(input: string | undefined, fallback: number): num
 }
 
 function normalizeForMatch(input: string): string {
-  return input.normalize("NFKC").toLocaleLowerCase();
+  return input.normalize("NFKC").toLowerCase();
 }
 
 function unique<T>(items: T[]): T[] {
