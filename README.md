@@ -40,7 +40,12 @@ GREETING_MODEL_BASE_URL=https://api.deepseek.com
 GREETING_MODEL_NAME=deepseek-chat
 GREETING_MODEL_INPUT_CNY_PER_MILLION=2
 GREETING_MODEL_OUTPUT_CNY_PER_MILLION=8
+BOSS_AGENT_WEB_ORIGIN=http://localhost:3000
+BOSS_AGENT_EXTENSION_ORIGIN=chrome-extension://你的插件ID
 ```
+
+首次加载扩展后，在 `chrome://extensions` 复制扩展 ID，填入
+`BOSS_AGENT_EXTENSION_ORIGIN`，然后重启本地工作台。服务端只接受该扩展来源和配置的本地工作台来源发起写操作。
 
 要恢复本地模式：
 

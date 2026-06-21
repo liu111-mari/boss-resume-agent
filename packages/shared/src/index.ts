@@ -111,29 +111,6 @@ export const greetingTaskStatusSchema = z.enum([
   "quota_blocked"
 ]);
 
-export const parsedJDSchema = z.object({
-  responsibilities: z.array(z.string()).default([]),
-  hardSkills: z.array(z.string()).default([]),
-  softSkills: z.array(z.string()).default([]),
-  tools: z.array(z.string()).default([]),
-  keywords: z.array(z.string()).default([]),
-  bonusItems: z.array(z.string()).default([]),
-  educationPreference: z.string().default("未明确"),
-  summary: z.string().default("")
-});
-
-export const conversationLeadSchema = z.object({
-  id: z.string(),
-  company: z.string(),
-  jobTitle: z.string(),
-  hrName: z.string(),
-  lastMessages: z.array(z.string()),
-  resumeRequested: z.boolean(),
-  jobDetailUrl: z.string().optional().default(""),
-  status: z.enum(["new", "resume_generated", "ignored"]).default("new"),
-  collectedAt: z.string()
-});
-
 export const greetingTaskSchema = z.object({
   id: z.string(),
   jobId: z.string(),
@@ -165,24 +142,6 @@ export const greetingTaskSchema = z.object({
   updatedAt: z.string()
 });
 
-export const profileAssetSchema = z.object({
-  id: z.string(),
-  type: z.enum(["education", "skill", "project", "internship", "certificate"]),
-  title: z.string(),
-  content: z.string(),
-  skillTags: z.array(z.string()).default([]),
-  directionTags: z.array(jobDirectionSchema).default([]),
-  evidenceLevel: z.enum(["verified", "needs_confirmation", "do_not_claim"]).default("verified")
-});
-
-export const resumeVersionSchema = z.object({
-  targetJob: z.string(),
-  resumeMarkdown: z.string(),
-  matchScore: z.number().min(0).max(100),
-  risks: z.array(z.string()).default([]),
-  interviewQuestions: z.array(z.string()).default([])
-});
-
 export type JobDirection = z.infer<typeof jobDirectionSchema>;
 export type JobCard = z.infer<typeof jobCardSchema>;
 export type FilterConfig = z.infer<typeof filterConfigSchema>;
@@ -190,30 +149,7 @@ export type ProfileItem = z.infer<typeof profileItemSchema>;
 export type Profile = z.infer<typeof profileSchema>;
 export type GreetingTemplate = z.infer<typeof greetingTemplateSchema>;
 export type GreetingTaskStatus = z.infer<typeof greetingTaskStatusSchema>;
-export type ParsedJD = z.infer<typeof parsedJDSchema>;
-export type ConversationLead = z.infer<typeof conversationLeadSchema>;
 export type GreetingTask = z.infer<typeof greetingTaskSchema>;
-export type ProfileAsset = z.infer<typeof profileAssetSchema>;
-export type ResumeVersion = z.infer<typeof resumeVersionSchema>;
-
-export const resumeRequestPatterns = [
-  "发简历",
-  "简历发",
-  "投递简历",
-  "方便发简历",
-  "可以发一下简历",
-  "把简历发",
-  "请发简历",
-  "发送简历"
-];
-
-export function cleanJDText(input: string): string {
-  return input
-    .replace(/\s+/g, " ")
-    .replace(/(举报|反馈|分享|收藏|立即沟通|感兴趣|不感兴趣)/g, "")
-    .trim()
-    .slice(0, 6000);
-}
 
 export function inferDirection(text: string): JobDirection {
   const source = text.toLowerCase();
@@ -223,35 +159,6 @@ export function inferDirection(text: string): JobDirection {
   if (/运营|增长|用户/.test(source)) return "产品运营";
   if (/实施|erp|saas|数字化|信息化/.test(source)) return "实施顾问";
   return "其他";
-}
-
-export function localAnalyzeJD(jdText: string): ParsedJD {
-  const cleaned = cleanJDText(jdText);
-  const hardSkills = pickKeywords(cleaned, ["SQL", "Python", "Excel", "Power BI", "Tableau", "PRD", "Axure", "Figma", "RAG", "Agent", "Dify", "Coze", "API", "ERP", "SaaS"]);
-  const softSkills = pickKeywords(cleaned, ["沟通", "协作", "自驱", "逻辑", "复盘", "执行力", "学习能力", "抗压"]);
-  const tools = pickKeywords(cleaned, ["Excel", "SQL", "Python", "Power BI", "Tableau", "Axure", "Figma", "Dify", "Coze", "飞书", "Notion"]);
-  const keywords = Array.from(new Set([...hardSkills, ...softSkills, ...tools])).slice(0, 12);
-  const sentences = cleaned.split(/[。；;.]/).map((item) => item.trim()).filter(Boolean);
-  return {
-    responsibilities: sentences.slice(0, 5),
-    hardSkills,
-    softSkills,
-    tools,
-    keywords,
-    bonusItems: sentences.filter((item) => /优先|加分|熟悉|了解/.test(item)).slice(0, 5),
-    educationPreference: /硕士|研究生/.test(cleaned) ? "偏好硕士/研究生" : /本科/.test(cleaned) ? "本科及以上" : "未明确",
-    summary: sentences.slice(0, 2).join("。")
-  };
-}
-
-export function isResumeRequested(messages: string[]): boolean {
-  const content = messages.join(" ");
-  return resumeRequestPatterns.some((pattern) => content.includes(pattern));
-}
-
-function pickKeywords(text: string, candidates: string[]): string[] {
-  const normalized = text.toLowerCase();
-  return candidates.filter((candidate) => normalized.includes(candidate.toLowerCase()));
 }
 
 export * from "./filter";

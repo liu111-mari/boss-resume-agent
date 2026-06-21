@@ -268,20 +268,11 @@ describe("persistent greeting automation API contracts", () => {
     });
   });
 
-  it("creates tasks from explicit task payloads, approves them, and reports quota basics", async () => {
+  it("approves persisted tasks and reports quota basics", async () => {
     const tasksRoute = await import("@/app/api/tasks/route");
     const approveRoute = await import("@/app/api/tasks/approve/route");
     const approvedRoute = await import("@/app/api/tasks/approved/route");
-
-    const createResponse = await tasksRoute.POST(
-      jsonRequest("/api/tasks", "POST", {
-        task: createTask()
-      })
-    );
-    expect(createResponse.status).toBe(200);
-    await expect(createResponse.json()).resolves.toMatchObject({
-      task: expect.objectContaining({ id: "task-1", status: "pending_review" })
-    });
+    await (await makeStore()).createOrUpdateTask(createTask());
 
     const approveResponse = await approveRoute.POST(
       jsonRequest("/api/tasks/approve", "POST", {
@@ -308,6 +299,50 @@ describe("persistent greeting automation API contracts", () => {
     await expect(listResponse.json()).resolves.toMatchObject({
       tasks: [expect.objectContaining({ id: "task-1", status: "approved" })]
     });
+  });
+
+  it("does not expose a full-task upsert route that can bypass task transitions", async () => {
+    const tasksRoute = await import("@/app/api/tasks/route");
+    expect("POST" in tasksRoute).toBe(false);
+  });
+
+  it("rejects cross-site and non-JSON write requests before parsing their bodies", async () => {
+    const configRoute = await import("@/app/api/config/route");
+    const crossSite = await configRoute.PUT(
+      new Request("http://localhost/api/config", {
+        method: "PUT",
+        headers: {
+          origin: "https://evil.example",
+          "content-type": "text/plain"
+        },
+        body: JSON.stringify({ dailyLimit: 1 })
+      })
+    );
+    expect(crossSite.status).toBe(403);
+
+    const browserForm = await configRoute.PUT(
+      new Request("http://localhost/api/config", {
+        method: "PUT",
+        headers: {
+          origin: "http://localhost:3000",
+          "content-type": "application/x-www-form-urlencoded"
+        },
+        body: "dailyLimit=1"
+      })
+    );
+    expect(browserForm.status).toBe(415);
+
+    const unknownExtension = await configRoute.PUT(
+      new Request("http://localhost/api/config", {
+        method: "PUT",
+        headers: {
+          origin: "chrome-extension://unknown-extension",
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({ dailyLimit: 1 })
+      })
+    );
+    expect(unknownExtension.status).toBe(403);
   });
 
   it("maps missing tasks to 404 and illegal transitions to 409", async () => {
@@ -340,31 +375,23 @@ describe("persistent greeting automation API contracts", () => {
   });
 
   it("patches pending_review drafts atomically and returns 409 for stale or transitioned tasks", async () => {
-    const tasksRoute = await import("@/app/api/tasks/route");
     const draftRoute = await import("@/app/api/tasks/draft/route");
     const store = await makeStore();
 
-    const createResponse = await tasksRoute.POST(
-      jsonRequest("/api/tasks", "POST", {
-        task: createTask({
-          id: "task-draft",
-          status: "pending_review",
-          updatedAt: "2026-06-19T00:00:00.000Z"
-        })
+    await store.createOrUpdateTask(
+      createTask({
+        id: "task-draft",
+        status: "pending_review",
+        updatedAt: "2026-06-19T00:00:00.000Z"
       })
     );
-    expect(createResponse.status).toBe(200);
-
-    const staleCreateResponse = await tasksRoute.POST(
-      jsonRequest("/api/tasks", "POST", {
-        task: createTask({
-          id: "task-draft-stale",
-          status: "pending_review",
-          updatedAt: "2026-06-19T00:00:00.000Z"
-        })
+    await store.createOrUpdateTask(
+      createTask({
+        id: "task-draft-stale",
+        status: "pending_review",
+        updatedAt: "2026-06-19T00:00:00.000Z"
       })
     );
-    expect(staleCreateResponse.status).toBe(200);
 
     const successResponse = await draftRoute.POST(
       jsonRequest("/api/tasks/draft", "POST", {
@@ -510,15 +537,10 @@ describe("persistent greeting automation API contracts", () => {
   });
 
   it("rejects selected pending-review tasks through the dedicated reject route", async () => {
-    const tasksRoute = await import("@/app/api/tasks/route");
     const rejectRoute = await import("@/app/api/tasks/reject/route");
-
-    const createResponse = await tasksRoute.POST(
-      jsonRequest("/api/tasks", "POST", {
-        task: createTask({ id: "task-reject-me", status: "pending_review" })
-      })
+    await (await makeStore()).createOrUpdateTask(
+      createTask({ id: "task-reject-me", status: "pending_review" })
     );
-    expect(createResponse.status).toBe(200);
 
     const response = await rejectRoute.POST(
       jsonRequest("/api/tasks/reject", "POST", {

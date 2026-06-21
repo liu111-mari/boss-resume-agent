@@ -28,6 +28,10 @@
       "[data-chat-history], [role='log'], .chat-history, .message-list, .chat-record, [class*='chat-history'], [class*='message-list'], [class*='chat-record']",
     message:
       "[data-message], .message-item, .message-content, [class*='message-item'], [class*='message-content']",
+    outgoingMessage:
+      "[data-direction='outgoing'], [data-self='true'], [data-owner='self'], .message-self, .message-mine, .message-outgoing, .item-myself, [class*='message-right'], [class*='message-self'], [class*='message-mine'], [class*='outgoing']",
+    incomingMessage:
+      "[data-direction='incoming'], [data-self='false'], [data-owner='other'], .message-incoming, .message-other, [class*='message-left'], [class*='incoming']",
     editable: "textarea, input, [contenteditable]",
     jobDetailLink: "a[href*='/job_detail/']",
     riskSurface: RISK_SURFACE_SELECTORS
@@ -165,8 +169,8 @@
     return { ok: true, element: null };
   }
 
-  function findExactAction(document, labels) {
-    const candidates = Array.from(document.querySelectorAll(SELECTORS.actionable)).filter((element) => {
+  function findExactAction(root, labels) {
+    const candidates = Array.from(root.querySelectorAll(SELECTORS.actionable)).filter((element) => {
       return isVisible(element, { interactive: true }) && isEnabled(element) && labels.has(actionableLabel(element));
     });
     return finderResult(candidates, { labels: Array.from(labels) });
@@ -243,8 +247,16 @@
     return { ok: true, element: editor };
   }
 
-  function findUniqueSendButton(document) {
-    return findExactAction(document, SEND_LABELS);
+  function findUniqueSendButton(document, editor) {
+    const container = editor?.closest(SELECTORS.preferredEditorContainer);
+    if (!container) {
+      return {
+        ok: false,
+        reason: "missing",
+        details: { labels: Array.from(SEND_LABELS), scope: "chat_container" }
+      };
+    }
+    return findExactAction(container, SEND_LABELS);
   }
 
   function escapeAttributeValue(value) {
@@ -273,6 +285,8 @@
         if (seen.has(message)) continue;
         seen.add(message);
         if (!isVisible(message)) continue;
+        if (message.matches(SELECTORS.incomingMessage)) continue;
+        if (!message.matches(SELECTORS.outgoingMessage)) continue;
         if (editor && (message === editor || message.contains(editor) || editor.contains(message))) continue;
         if (message.matches(SELECTORS.editable) || message.closest(SELECTORS.editable)) continue;
         if (visibleText(message).includes(expected)) {
@@ -303,12 +317,10 @@
     const matches = findMatchingHistoryMessages(document, expected, editor);
     const baselineCount = Number.isFinite(baseline?.count) ? baseline.count : 0;
     const baselineElements = baseline?.elements instanceof Set ? baseline.elements : new Set();
-    const baselineStableIds = baseline?.stableIds instanceof Set ? baseline.stableIds : new Set();
-    const newStableMatches = matches.filter((match) => match.stableId && !baselineStableIds.has(match.stableId));
     const countDelta = matches.length - baselineCount;
     const countIncreased = countDelta > 0;
 
-    if (!countIncreased && !newStableMatches.length) {
+    if (!countIncreased) {
       return {
         ok: false,
         reason: "confirmation_missing",
@@ -322,7 +334,6 @@
     }
     const referenceNewMatches = matches.filter((match) => !baselineElements.has(match.element));
     const evidenceMatch =
-      newStableMatches[newStableMatches.length - 1] ||
       referenceNewMatches[referenceNewMatches.length - 1] ||
       matches[matches.length - 1];
     return {
@@ -397,7 +408,7 @@
     const setResult = setEditorText(editorResult.element, message, window);
     if (!setResult.ok) return pausedFailure(setResult.reason, setResult.details);
 
-    const sendResult = findUniqueSendButton(document);
+    const sendResult = findUniqueSendButton(document, editorResult.element);
     if (!sendResult.ok) {
       return pausedFailure(sendResult.reason, { stage: "send_button", ...sendResult.details });
     }

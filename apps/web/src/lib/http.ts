@@ -21,7 +21,18 @@ export class InvalidRequestError extends Error {
   }
 }
 
+export class UnsafeWriteRequestError extends Error {
+  constructor(
+    public readonly code: "forbidden_origin" | "json_required",
+    public readonly status: 403 | 415
+  ) {
+    super(code);
+    this.name = "UnsafeWriteRequestError";
+  }
+}
+
 export async function parseJsonBody<T>(request: Request, schema: ZodType<T>): Promise<T> {
+  assertTrustedJsonWrite(request);
   let body: unknown;
   try {
     body = await request.json();
@@ -54,6 +65,10 @@ export async function withApiErrorHandling<T>(handler: () => Promise<T>): Promis
 }
 
 export function createErrorResponse(error: unknown): Response {
+  if (error instanceof UnsafeWriteRequestError) {
+    return NextResponse.json({ error: error.code }, { status: error.status });
+  }
+
   if (error instanceof InvalidRequestError) {
     return NextResponse.json(
       {
@@ -137,6 +152,22 @@ export function createErrorResponse(error: unknown): Response {
     },
     { status: 500 }
   );
+}
+
+export function assertTrustedJsonWrite(request: Request): void {
+  const origin = request.headers.get("origin");
+  if (origin && !isTrustedLocalOrigin(origin) && origin !== process.env.BOSS_AGENT_EXTENSION_ORIGIN) {
+    throw new UnsafeWriteRequestError("forbidden_origin", 403);
+  }
+
+  const contentType = request.headers.get("content-type") ?? "";
+  if (!contentType.toLowerCase().startsWith("application/json")) {
+    throw new UnsafeWriteRequestError("json_required", 415);
+  }
+}
+
+function isTrustedLocalOrigin(origin: string): boolean {
+  return origin === (process.env.BOSS_AGENT_WEB_ORIGIN ?? "http://localhost:3000");
 }
 
 function serializeZodIssues(error: ZodError): SerializableIssue[] {

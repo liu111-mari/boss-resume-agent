@@ -114,16 +114,6 @@ export async function saveTemplate(template: GreetingTemplate) {
   });
 }
 
-export async function updateTask(task: GreetingTask) {
-  return fetchJson<{ task: GreetingTask }>("/api/tasks", {
-    method: "POST",
-    headers: {
-      "content-type": "application/json"
-    },
-    body: JSON.stringify({ task })
-  });
-}
-
 export async function updateTaskDraft(taskId: string, messageDraft: string, expectedUpdatedAt: string) {
   return fetchJson<{ task: GreetingTask }>("/api/tasks/draft", {
     method: "POST",

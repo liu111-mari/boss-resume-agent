@@ -7,7 +7,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GreetingTask } from "@boss-agent/shared";
 import {
   createDomainStore,
-  DomainQuotaExceededError,
   getShanghaiDateKey,
   resetDomainStoreCache
 } from "@/lib/domain-store";
@@ -85,7 +84,7 @@ describe("confirmed-send quota", () => {
     await expect(store.confirmTaskSent("confirmed", "", "2026-06-21")).rejects.toThrow();
   });
 
-  it("blocks at the configured limit and never exceeds it under concurrency", async () => {
+  it("records every confirmed delivery truthfully even when legacy state already exceeds the limit", async () => {
     const first = await makeStore();
     const second = createDomainStore(tempDir);
     await first.saveConfig({ dailyLimit: 1 });
@@ -97,15 +96,9 @@ describe("confirmed-send quota", () => {
       second.confirmTaskSent("two", "message:two", "2026-06-21")
     ]);
 
-    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
-    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
-    expect(
-      results.some(
-        (result) => result.status === "rejected" && result.reason instanceof DomainQuotaExceededError
-      )
-    ).toBe(true);
-    await expect(first.getDailyUsage("2026-06-21")).resolves.toMatchObject({ confirmedSends: 1 });
-    expect((await first.getTasks()).filter((task) => task.status === "quota_blocked")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(2);
+    await expect(first.getDailyUsage("2026-06-21")).resolves.toMatchObject({ confirmedSends: 2 });
+    expect((await first.getTasks()).filter((task) => task.status === "sent")).toHaveLength(2);
   });
 
   it("returns no approved tasks when today's confirmed quota is exhausted", async () => {
@@ -206,7 +199,7 @@ describe("confirmed-send quota", () => {
     expect((await first.getTasks()).filter((task) => task.status === "quota_blocked")).toHaveLength(1);
   });
 
-  it("recovers an expired sending lease for a later claim", async () => {
+  it("pauses an expired sending lease instead of automatically resending it", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-06-21T04:00:00.000Z"));
     const store = await makeStore();
@@ -219,13 +212,14 @@ describe("confirmed-send quota", () => {
     );
 
     const result = await store.claimApprovedTasksWithinQuota("2026-06-21");
-    expect(result.tasks).toHaveLength(1);
-    expect(result.tasks[0]).toMatchObject({
-      id: "expired",
-      status: "sending",
-      quotaReservationDate: "2026-06-21"
-    });
-    expect(new Date(result.tasks[0].sendLeaseExpiresAt!).getTime()).toBeGreaterThan(Date.now());
+    expect(result.tasks).toHaveLength(0);
+    await expect(store.getTasks()).resolves.toEqual([
+      expect.objectContaining({
+        id: "expired",
+        status: "paused",
+        failureReason: "send_lease_expired_manual_review"
+      })
+    ]);
   });
 
   it("counts a paused task with confirmation evidence so it cannot be resent for free", async () => {
@@ -243,6 +237,21 @@ describe("confirmed-send quota", () => {
     ).resolves.toMatchObject({
       status: "sent",
       confirmationEvidence: "message:paused-confirmed"
+    });
+  });
+
+  it("records confirmed delivery truthfully even if the configured limit was lowered after send", async () => {
+    const store = await makeStore();
+    await store.saveConfig({ dailyLimit: 2 });
+    await store.createOrUpdateTask(createTask("confirmed-after-lower", "sending"));
+    await store.saveConfig({ dailyLimit: 1 });
+    await store.incrementConfirmedSend("2026-06-21");
+
+    await expect(
+      store.confirmTaskSent("confirmed-after-lower", "message:confirmed-after-lower", "2026-06-21")
+    ).resolves.toMatchObject({
+      status: "sent",
+      confirmationEvidence: "message:confirmed-after-lower"
     });
   });
 
@@ -266,6 +275,7 @@ describe("confirmed-send quota", () => {
       );
       expect(rejected.status).toBe(403);
 
+      process.env.BOSS_AGENT_EXTENSION_ORIGIN = "chrome-extension://test-extension";
       const accepted = await POST(
         new Request("http://localhost/api/tasks/approved", {
           method: "POST",
@@ -281,6 +291,7 @@ describe("confirmed-send quota", () => {
         tasks: [expect.objectContaining({ id: "claim-api", status: "sending" })]
       });
     } finally {
+      delete process.env.BOSS_AGENT_EXTENSION_ORIGIN;
       resetDomainStoreCache();
       if (previousDataDir === undefined) delete process.env.BOSS_AGENT_DATA_DIR;
       else process.env.BOSS_AGENT_DATA_DIR = previousDataDir;

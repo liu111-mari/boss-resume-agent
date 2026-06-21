@@ -42,7 +42,10 @@ test("replays a sanitized BOSS chat fixture with one editor, send action, and hi
 
   assert.deepEqual(detectRiskBlocker(document), { ok: true, element: null });
   assert.equal(findUniqueChatEditor(document).element.id, "boss-chat-editor");
-  assert.equal(findUniqueSendButton(document).element.id, "boss-send-button");
+  assert.equal(
+    findUniqueSendButton(document, document.querySelector("#boss-chat-editor")).element.id,
+    "boss-send-button"
+  );
 
   const baseline = captureMessageBaseline(
     document,
@@ -272,34 +275,66 @@ test("isVisible rejects opacity zero, inert ancestors, and failed checkVisibilit
 
 test("interactive finders reject pointer-events none", () => {
   const dom = createDom(`
-    <button style="pointer-events: none">发送</button>
-    <textarea style="pointer-events: none"></textarea>
+    <section data-chat-container>
+      <button style="pointer-events: none">发送</button>
+      <textarea style="pointer-events: none"></textarea>
+    </section>
   `);
 
-  assert.equal(findUniqueSendButton(dom.window.document).reason, "missing");
+  assert.equal(
+    findUniqueSendButton(dom.window.document, dom.window.document.querySelector("textarea")).reason,
+    "missing"
+  );
   assert.equal(findUniqueChatEditor(dom.window.document).reason, "missing");
 });
 
 test("findUniqueSendButton requires exact visible enabled labels", () => {
   const dom = createDom(`
-    <button>发送记录</button>
-    <button disabled>发送</button>
-    <button> 立即   发送 </button>
+    <section data-chat-container>
+      <textarea></textarea>
+      <button>发送记录</button>
+      <button disabled>发送</button>
+      <button> 立即   发送 </button>
+    </section>
   `);
 
-  const result = findUniqueSendButton(dom.window.document);
+  const result = findUniqueSendButton(dom.window.document, dom.window.document.querySelector("textarea"));
   assert.equal(result.ok, true);
   assert.equal(result.element.textContent.trim(), "立即   发送");
 });
 
 test("findUniqueSendButton reports missing and ambiguous buttons", () => {
-  const missing = createDom("<button disabled>发送</button>");
-  assert.equal(findUniqueSendButton(missing.window.document).reason, "missing");
+  const missing = createDom(
+    "<section data-chat-container><textarea></textarea><button disabled>发送</button></section>"
+  );
+  assert.equal(
+    findUniqueSendButton(missing.window.document, missing.window.document.querySelector("textarea")).reason,
+    "missing"
+  );
 
-  const ambiguous = createDom("<button>发送</button><button>打招呼</button>");
-  const result = findUniqueSendButton(ambiguous.window.document);
+  const ambiguous = createDom(
+    "<section data-chat-container><textarea></textarea><button>发送</button><button>打招呼</button></section>"
+  );
+  const result = findUniqueSendButton(
+    ambiguous.window.document,
+    ambiguous.window.document.querySelector("textarea")
+  );
   assert.equal(result.reason, "ambiguous");
   assert.equal(result.details.count, 2);
+});
+
+test("findUniqueSendButton only accepts the send button scoped to the editor chat container", () => {
+  const dom = createDom(`
+    <button id="outside-send">发送</button>
+    <section data-chat-container>
+      <textarea id="editor"></textarea>
+      <button id="chat-send">发送</button>
+    </section>
+  `);
+  const { document } = dom.window;
+  const result = findUniqueSendButton(document, document.querySelector("#editor"));
+  assert.equal(result.ok, true);
+  assert.equal(result.element.id, "chat-send");
 });
 
 test("confirmMessageSent only accepts message nodes inside chat history", () => {
@@ -308,7 +343,7 @@ test("confirmMessageSent only accepts message nodes inside chat history", () => 
     <p>${text}</p>
     <section class="chat-dialog"><textarea>${text}</textarea></section>
     <section class="chat-history">
-      <div class="message-item">另一条消息</div>
+      <div class="message-item" data-direction="incoming">另一条消息</div>
     </section>
   `);
   const editor = dom.window.document.querySelector("textarea");
@@ -321,6 +356,7 @@ test("confirmMessageSent only accepts message nodes inside chat history", () => 
 
   const message = dom.window.document.createElement("div");
   message.className = "message-item";
+  message.dataset.direction = "outgoing";
   message.textContent = `我 12:30 ${text} 已送达`;
   dom.window.document.querySelector(".chat-history").append(message);
 
@@ -335,7 +371,7 @@ test("confirmMessageSent rejects a pre-existing identical message until a new on
   const dom = createDom(`
     <section class="chat-dialog"><textarea></textarea></section>
     <section class="chat-history">
-      <div class="message-item" id="old">${text}</div>
+      <div class="message-item" data-direction="outgoing" id="old">${text}</div>
     </section>
   `);
   const { document } = dom.window;
@@ -349,6 +385,7 @@ test("confirmMessageSent rejects a pre-existing identical message until a new on
 
   const newMessage = document.createElement("div");
   newMessage.className = "message-item";
+  newMessage.dataset.direction = "outgoing";
   newMessage.textContent = text;
   document.querySelector(".chat-history").append(newMessage);
 
@@ -362,13 +399,14 @@ test("confirmMessageSent rejects a same-count rerender of matching messages", ()
   const text = "同一条问候";
   const dom = createDom(`
     <section class="chat-dialog"><textarea></textarea></section>
-    <section class="chat-history"><div class="message-item" data-message-id="same-id">${text}</div></section>
+    <section class="chat-history"><div class="message-item" data-direction="outgoing" data-message-id="same-id">${text}</div></section>
   `);
   const { document } = dom.window;
   const editor = document.querySelector("textarea");
   const baseline = captureMessageBaseline(document, text, editor);
   const replacement = document.createElement("div");
   replacement.className = "message-item";
+  replacement.dataset.direction = "outgoing";
   replacement.dataset.messageId = "same-id";
   replacement.textContent = text;
   document.querySelector(".chat-history").replaceChildren(replacement);
@@ -380,25 +418,26 @@ test("confirmMessageSent rejects a same-count rerender when messages have no sta
   const text = "无ID重渲染";
   const dom = createDom(`
     <section class="chat-dialog"><textarea></textarea></section>
-    <section class="chat-history"><div class="message-item">${text}</div></section>
+    <section class="chat-history"><div class="message-item" data-direction="outgoing">${text}</div></section>
   `);
   const { document } = dom.window;
   const editor = document.querySelector("textarea");
   const baseline = captureMessageBaseline(document, text, editor);
   const replacement = document.createElement("div");
   replacement.className = "message-item";
+  replacement.dataset.direction = "outgoing";
   replacement.textContent = text;
   document.querySelector(".chat-history").replaceChildren(replacement);
 
   assert.equal(confirmMessageSent(document, text, editor, baseline).ok, false);
 });
 
-test("confirmMessageSent accepts a new stable ID even when matching count stays equal", () => {
+test("confirmMessageSent rejects a new stable ID when matching count stays equal", () => {
   const text = "稳定ID确认";
   const dom = createDom(`
     <section class="chat-dialog"><textarea></textarea></section>
     <section class="chat-history">
-      <div class="message-item" data-message-id="old-id">${text}</div>
+      <div class="message-item" data-direction="outgoing" data-message-id="old-id">${text}</div>
     </section>
   `);
   const { document } = dom.window;
@@ -406,18 +445,48 @@ test("confirmMessageSent accepts a new stable ID even when matching count stays 
   const baseline = captureMessageBaseline(document, text, editor);
   const replacement = document.createElement("div");
   replacement.className = "message-item";
+  replacement.dataset.direction = "outgoing";
   replacement.dataset.messageId = "new-id";
   replacement.textContent = text;
   document.querySelector(".chat-history").replaceChildren(replacement);
 
   const result = confirmMessageSent(document, text, editor, baseline);
 
-  assert.equal(result.ok, true);
-  assert.equal(result.evidence.element, replacement);
-  assert.equal(result.evidence.stableId, "new-id");
-  assert.equal(result.evidence.selector, '[data-message-id="new-id"]');
-  assert.equal(result.evidence.text, text);
-  assert.equal(result.evidence.countDelta, 0);
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "confirmation_missing");
+});
+
+test("confirmMessageSent ignores an incoming identical message", () => {
+  const text = "同文对方回复";
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea></section>
+    <section class="chat-history"></section>
+  `);
+  const { document } = dom.window;
+  const editor = document.querySelector("textarea");
+  const baseline = captureMessageBaseline(document, text, editor);
+  const incoming = document.createElement("div");
+  incoming.className = "message-item";
+  incoming.dataset.direction = "incoming";
+  incoming.textContent = text;
+  document.querySelector(".chat-history").append(incoming);
+
+  assert.equal(confirmMessageSent(document, text, editor, baseline).ok, false);
+});
+
+test("an explicit incoming message is rejected even inside an outgoing-named history container", () => {
+  const text = "容器类名不能覆盖消息方向";
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea></section>
+    <section class="chat-history message-right">
+      <div class="message-item" data-direction="incoming">${text}</div>
+    </section>
+  `);
+  const { document } = dom.window;
+  const editor = document.querySelector("textarea");
+  const baseline = { elements: new Set(), identities: [], stableIds: new Set(), count: 0, fingerprint: "" };
+
+  assert.equal(confirmMessageSent(document, text, editor, baseline).ok, false);
 });
 
 test("captureMessageBaseline records stable IDs and null identities", () => {
@@ -425,8 +494,8 @@ test("captureMessageBaseline records stable IDs and null identities", () => {
   const dom = createDom(`
     <section class="chat-dialog"><textarea></textarea></section>
     <section class="chat-history">
-      <div class="message-item" data-id="stable-one">${text}</div>
-      <div class="message-item">${text}</div>
+      <div class="message-item" data-direction="outgoing" data-id="stable-one">${text}</div>
+      <div class="message-item" data-direction="outgoing">${text}</div>
     </section>
   `);
   const { document } = dom.window;
@@ -448,6 +517,7 @@ test("confirmation evidence uses a valid attribute selector for an id stable ide
   const baseline = captureMessageBaseline(document, text, editor);
   const message = document.createElement("div");
   message.className = "message-item";
+  message.dataset.direction = "outgoing";
   message.id = "message 1";
   message.textContent = text;
   document.querySelector(".chat-history").append(message);
@@ -463,13 +533,14 @@ test("confirmMessageSent returns the new match even when it is inserted before t
   const text = "新增节点证据";
   const dom = createDom(`
     <section class="chat-dialog"><textarea></textarea></section>
-    <section class="chat-history"><div class="message-item" id="old">${text}</div></section>
+    <section class="chat-history"><div class="message-item" data-direction="outgoing" id="old">${text}</div></section>
   `);
   const { document } = dom.window;
   const editor = document.querySelector("textarea");
   const baseline = captureMessageBaseline(document, text, editor);
   const newMessage = document.createElement("div");
   newMessage.className = "message-item";
+  newMessage.dataset.direction = "outgoing";
   newMessage.textContent = text;
   document.querySelector(".chat-history").prepend(newMessage);
 
@@ -492,6 +563,7 @@ test("sendGreeting opens communication, sends, and waits for history confirmatio
     dialog.querySelector("#send").addEventListener("click", () => {
       const message = document.createElement("div");
       message.className = "message-item";
+      message.dataset.direction = "outgoing";
       message.textContent = text;
       document.querySelector(".chat-history").append(message);
     });
@@ -538,7 +610,7 @@ test("sendGreeting does not accept an identical message that existed before clic
   const text = "历史里已经有的问候";
   const dom = createDom(`
     <section class="chat-dialog"><textarea></textarea><button>发送</button></section>
-    <section class="chat-history"><div class="message-item">${text}</div></section>
+    <section class="chat-history"><div class="message-item" data-direction="outgoing">${text}</div></section>
   `);
   let time = 0;
 
@@ -564,12 +636,13 @@ test("sendGreeting confirms a second identical message added after clicking send
   const text = "再次发送相同问候";
   const dom = createDom(`
     <section class="chat-dialog"><textarea></textarea><button id="send">发送</button></section>
-    <section class="chat-history"><div class="message-item">${text}</div></section>
+    <section class="chat-history"><div class="message-item" data-direction="outgoing">${text}</div></section>
   `);
   const { document } = dom.window;
   document.querySelector("#send").addEventListener("click", () => {
     const message = document.createElement("div");
     message.className = "message-item";
+    message.dataset.direction = "outgoing";
     message.textContent = text;
     document.querySelector(".chat-history").append(message);
   });

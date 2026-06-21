@@ -1,7 +1,8 @@
 import { NextResponse } from "next/server";
+import { z } from "zod";
 
 import { getDomainStore, getShanghaiDateKey } from "@/lib/domain-store";
-import { withApiErrorHandling } from "@/lib/http";
+import { parseJsonBody, withApiErrorHandling } from "@/lib/http";
 
 export async function GET() {
   return withApiErrorHandling(async () => {
@@ -48,15 +49,7 @@ export async function GET() {
 
 export async function POST(request: Request) {
   return withApiErrorHandling(async () => {
-    const origin = request.headers.get("origin");
-    if (origin && !origin.startsWith("chrome-extension://")) {
-      return NextResponse.json({ error: "forbidden_origin" }, { status: 403 });
-    }
-    const contentType = request.headers.get("content-type") ?? "";
-    if (!contentType.toLowerCase().startsWith("application/json")) {
-      return NextResponse.json({ error: "json_required" }, { status: 415 });
-    }
-    await request.json();
+    await parseJsonBody(request, z.object({}).strict());
     return NextResponse.json(await getDomainStore().claimApprovedTasksWithinQuota(getShanghaiDateKey()));
   });
 }

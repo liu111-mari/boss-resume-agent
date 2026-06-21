@@ -392,10 +392,10 @@ export function createDomainStore(
         ) {
           tasks[index] = greetingTaskSchema.parse({
             ...task,
-            status: "approved",
+            status: "paused",
             quotaReservationDate: undefined,
             sendLeaseExpiresAt: undefined,
-            failureReason: "send_lease_expired",
+            failureReason: "send_lease_expired_manual_review",
             updatedAt: now.toISOString()
           });
           tasksChanged = true;
@@ -524,11 +524,7 @@ export function createDomainStore(
     }
 
     return queueMutation("confirmed-send", async () => {
-      const [tasks, usage, config] = await Promise.all([
-        repositories.tasks.read(),
-        repositories.dailyUsage.read(),
-        repositories.config.read()
-      ]);
+      const tasks = await repositories.tasks.read();
       const taskIndex = tasks.findIndex((task) => task.id === taskId);
       if (taskIndex < 0) {
         throw new DomainEntityNotFoundError("task", taskId);
@@ -564,22 +560,6 @@ export function createDomainStore(
       const confirmationDate = currentTask.quotaReservationDate ?? date;
       if (!confirmationDate) {
         throw new Error("send reservation is not valid for the confirmation date");
-      }
-
-      const usageIndex = usage.findIndex((item) => item.date === confirmationDate);
-      const currentUsage = mergeConfirmedTaskUsage(
-        usageIndex >= 0 ? usage[usageIndex] : createDefaultDailyUsage(confirmationDate),
-        tasks
-      );
-      if (currentUsage.confirmedSends >= config.dailyLimit) {
-        tasks[taskIndex] = greetingTaskSchema.parse({
-          ...currentTask,
-          status: "quota_blocked",
-          failureReason: "daily_quota_reached",
-          updatedAt: new Date().toISOString()
-        });
-        await repositories.tasks.write(tasks);
-        throw new DomainQuotaExceededError(confirmationDate, currentUsage.confirmedSends, config.dailyLimit);
       }
 
       const now = new Date().toISOString();
