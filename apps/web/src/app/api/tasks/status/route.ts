@@ -13,12 +13,34 @@ export async function POST(request: Request) {
         taskId: z.string(),
         status: greetingTaskSchema.shape.status,
         failureReason: z.string().optional(),
-        confirmationEvidence: z.string().optional()
+        confirmationEvidence: z.string().trim().min(1).optional()
       })
     );
 
-    const metadata = body.failureReason === undefined ? {} : { failureReason: body.failureReason };
-    const task = await getDomainStore().transitionTask(body.taskId, body.status, metadata);
+    const store = getDomainStore();
+    if (body.status === "sending") {
+      const task = await store.refreshTaskSendReservation(body.taskId);
+      return NextResponse.json({ task });
+    }
+    if (body.status === "sent") {
+      if (!body.confirmationEvidence) {
+        return NextResponse.json(
+          {
+            error: "invalid_request",
+            issues: [{ code: "custom", message: "confirmationEvidence is required for sent", path: ["confirmationEvidence"] }]
+          },
+          { status: 400 }
+        );
+      }
+      const task = await store.confirmTaskSent(body.taskId, body.confirmationEvidence);
+      return NextResponse.json({ task });
+    }
+
+    const metadata = {
+      ...(body.failureReason === undefined ? {} : { failureReason: body.failureReason }),
+      ...(body.confirmationEvidence === undefined ? {} : { confirmationEvidence: body.confirmationEvidence })
+    };
+    const task = await store.transitionTask(body.taskId, body.status, metadata);
     return NextResponse.json({ task });
   });
 }

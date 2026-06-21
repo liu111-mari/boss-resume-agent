@@ -1,7 +1,12 @@
 import { NextResponse } from "next/server";
 import { ZodError, type ZodType } from "zod";
 
-import { DomainConflictError, DomainEntityNotFoundError, DomainTransitionError } from "@/lib/domain-store";
+import {
+  DomainConflictError,
+  DomainEntityNotFoundError,
+  DomainQuotaExceededError,
+  DomainTransitionError
+} from "@/lib/domain-store";
 
 type SerializableIssue = {
   code: string;
@@ -99,6 +104,18 @@ export function createErrorResponse(error: unknown): Response {
         entityId: error.entityId,
         expectedUpdatedAt: error.expectedUpdatedAt,
         actualUpdatedAt: error.actualUpdatedAt
+      },
+      { status: 409 }
+    );
+  }
+
+  if (error instanceof DomainQuotaExceededError) {
+    return NextResponse.json(
+      {
+        error: "quota_blocked",
+        date: error.date,
+        used: error.used,
+        limit: error.limit
       },
       { status: 409 }
     );

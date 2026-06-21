@@ -264,6 +264,28 @@ function createPipelineStoreStub(jobs: JobCard[]): PipelineStore {
       return next;
     }),
     getApprovedTasks: vi.fn(async () => tasks.filter((task) => task.status === "approved")),
+    claimApprovedTasksWithinQuota: vi.fn(async () => ({
+      tasks: [],
+      approvedCount: tasks.filter((task) => task.status === "approved").length,
+      quota: {
+        date: "2026-06-20",
+        used: 0,
+        limit: 100,
+        reserved: 0,
+        remaining: 100,
+        blocked: false,
+        usage: {
+          date: "2026-06-20",
+          confirmedSends: 0,
+          failures: 0,
+          modelCalls: 0,
+          estimatedCostCny: 0,
+          pausedReason: "",
+          updatedAt: FIXED_NOW
+        },
+        config
+      }
+    })),
     getDailyUsage: vi.fn(async () => ({
       date: "2026-06-20",
       confirmedSends: 0,
@@ -283,6 +305,24 @@ function createPipelineStoreStub(jobs: JobCard[]): PipelineStore {
       pausedReason: "",
       updatedAt: FIXED_NOW
     })),
+    confirmTaskSent: vi.fn(async (taskId: string, confirmationEvidence: string) => {
+      const index = tasks.findIndex((item) => item.id === taskId);
+      if (index < 0) throw new Error(`missing task: ${taskId}`);
+      const next = {
+        ...tasks[index],
+        status: "sent" as const,
+        confirmationEvidence,
+        sentAt: FIXED_NOW,
+        updatedAt: FIXED_NOW
+      };
+      tasks[index] = next;
+      return next;
+    }),
+    refreshTaskSendReservation: vi.fn(async (taskId: string) => {
+      const task = tasks.find((item) => item.id === taskId);
+      if (!task) throw new Error(`missing task: ${taskId}`);
+      return task;
+    }),
     appendRunLog: vi.fn(async (entry: unknown) => {
       logs.push(entry as Record<string, unknown>);
       return entry as never;

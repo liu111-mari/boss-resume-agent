@@ -23,6 +23,33 @@ p {
   font-size: 12px;
 }
 
+.metrics {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.metrics div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border-radius: 7px;
+  background: #f5f8f7;
+  padding: 7px 8px;
+  font-size: 12px;
+}
+
+.metrics dt {
+  color: #6b7671;
+}
+
+.metrics dd {
+  margin: 0;
+  max-width: 150px;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+
 button,
 a {
   display: flex;

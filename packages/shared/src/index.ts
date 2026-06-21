@@ -157,6 +157,10 @@ export const greetingTaskSchema = z.object({
   templateVersion: z.number().int().positive().default(1),
   estimatedCostCny: z.number().nonnegative().default(0),
   failureReason: z.string().optional().default(""),
+  confirmationEvidence: z.string().optional(),
+  sentAt: z.string().optional(),
+  quotaReservationDate: z.string().optional(),
+  sendLeaseExpiresAt: z.string().optional(),
   createdAt: z.string(),
   updatedAt: z.string()
 });

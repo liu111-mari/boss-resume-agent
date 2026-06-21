@@ -62,7 +62,7 @@ const taskTransitionMap: Record<GreetingTaskStatus, readonly GreetingTaskStatus[
   generated: ["pending_review", "failed"],
   pending_review: ["approved", "rejected"],
   approved: ["sending", "rejected", "quota_blocked"],
-  sending: ["sent", "failed", "paused", "quota_blocked"],
+  sending: ["failed", "paused", "quota_blocked"],
   paused: ["approved", "rejected"],
   quota_blocked: ["approved", "rejected"],
   sent: [],
@@ -114,6 +114,28 @@ export class DomainConflictError extends Error {
     super(`${entityType} conflict: ${entityId}`);
     this.name = "DomainConflictError";
   }
+}
+
+export class DomainQuotaExceededError extends Error {
+  constructor(
+    public readonly date: string,
+    public readonly used: number,
+    public readonly limit: number
+  ) {
+    super(`Daily confirmed-send quota reached: ${used}/${limit}`);
+    this.name = "DomainQuotaExceededError";
+  }
+}
+
+export function getShanghaiDateKey(now = new Date()): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
 export function resolveDomainStoreBaseDir(
@@ -352,13 +374,121 @@ export function createDomainStore(
     return tasks.filter((task) => task.status === "approved");
   }
 
+  async function claimApprovedTasksWithinQuota(date = getShanghaiDateKey(), maxTasks = 1) {
+    return queueMutation("claim-approved", async () => {
+      const [tasks, usage, config] = await Promise.all([
+        repositories.tasks.read(),
+        repositories.dailyUsage.read(),
+        repositories.config.read()
+      ]);
+      const now = new Date();
+      let tasksChanged = false;
+      for (let index = 0; index < tasks.length; index += 1) {
+        const task = tasks[index];
+        if (
+          task.status === "sending" &&
+          getSendLeaseExpiry(task).getTime() <= now.getTime() &&
+          !task.confirmationEvidence
+        ) {
+          tasks[index] = greetingTaskSchema.parse({
+            ...task,
+            status: "approved",
+            quotaReservationDate: undefined,
+            sendLeaseExpiresAt: undefined,
+            failureReason: "send_lease_expired",
+            updatedAt: now.toISOString()
+          });
+          tasksChanged = true;
+        }
+      }
+      const currentUsage = mergeConfirmedTaskUsage(
+        usage.find((item) => item.date === date) ?? createDefaultDailyUsage(date),
+        tasks
+      );
+      const approved = tasks.filter((task) => task.status === "approved");
+      const reserved = tasks.filter(
+        (task) =>
+          task.status === "sending" &&
+          getSendLeaseExpiry(task).getTime() > now.getTime() &&
+          (task.quotaReservationDate ?? getShanghaiDateKey(new Date(task.updatedAt))) === date
+      ).length;
+      const available = Math.max(config.dailyLimit - currentUsage.confirmedSends - reserved, 0);
+      const claimLimit = Math.max(0, Math.min(Math.trunc(maxTasks), available));
+      const selectedIds = new Set(approved.slice(0, claimLimit).map((task) => task.id));
+      const nowIso = now.toISOString();
+      const leaseExpiresAt = new Date(now.getTime() + 2 * 60_000).toISOString();
+      const claimed: GreetingTask[] = [];
+
+      if (selectedIds.size > 0) {
+        for (let index = 0; index < tasks.length; index += 1) {
+          if (!selectedIds.has(tasks[index].id)) continue;
+          const next = greetingTaskSchema.parse({
+            ...tasks[index],
+            status: "sending",
+            quotaReservationDate: date,
+            sendLeaseExpiresAt: leaseExpiresAt,
+            failureReason: "",
+            updatedAt: nowIso
+          });
+          tasks[index] = next;
+          claimed.push(next);
+          tasksChanged = true;
+        }
+      }
+      if (tasksChanged) {
+        await repositories.tasks.write(tasks);
+      }
+
+      const totalReserved = reserved + claimed.length;
+      const remaining = Math.max(config.dailyLimit - currentUsage.confirmedSends - totalReserved, 0);
+      return {
+        tasks: claimed,
+        approvedCount: approved.length,
+        quota: {
+          date,
+          used: currentUsage.confirmedSends,
+          limit: config.dailyLimit,
+          reserved: totalReserved,
+          remaining,
+          blocked: claimed.length === 0 && remaining === 0,
+          usage: currentUsage,
+          config
+        }
+      };
+    });
+  }
+
   async function getDailyUsage(date: string): Promise<DailyUsage> {
-    const usage = await repositories.dailyUsage.read();
-    return usage.find((item) => item.date === date) ?? createDefaultDailyUsage(date);
+    const [usage, tasks] = await Promise.all([
+      repositories.dailyUsage.read(),
+      repositories.tasks.read()
+    ]);
+    return mergeConfirmedTaskUsage(
+      usage.find((item) => item.date === date) ?? createDefaultDailyUsage(date),
+      tasks
+    );
   }
 
   async function getDailyUsageHistory(): Promise<DailyUsage[]> {
-    return repositories.dailyUsage.read();
+    const [usage, tasks] = await Promise.all([
+      repositories.dailyUsage.read(),
+      repositories.tasks.read()
+    ]);
+    const dates = new Set([
+      ...usage.map((item) => item.date),
+      ...tasks
+        .filter((task) => task.status === "sent" && task.sentAt)
+        .map((task) => getShanghaiDateKey(new Date(task.sentAt!)))
+    ]);
+    return Array.from(dates)
+      .sort()
+      .reverse()
+      .map((date) =>
+        mergeConfirmedTaskUsage(
+          usage.find((item) => item.date === date) ?? createDefaultDailyUsage(date),
+          tasks
+        )
+      );
   }
 
   async function incrementConfirmedSend(date: string): Promise<DailyUsage> {
@@ -379,6 +509,144 @@ export function createDomainStore(
       }
 
       await repositories.dailyUsage.write(usage);
+      return next;
+    });
+  }
+
+  async function confirmTaskSent(
+    taskId: string,
+    confirmationEvidence: string,
+    date = getShanghaiDateKey()
+  ): Promise<GreetingTask> {
+    const evidence = confirmationEvidence.trim();
+    if (!evidence) {
+      throw new Error("confirmation evidence is required");
+    }
+
+    return queueMutation("confirmed-send", async () => {
+      const [tasks, usage, config] = await Promise.all([
+        repositories.tasks.read(),
+        repositories.dailyUsage.read(),
+        repositories.config.read()
+      ]);
+      const taskIndex = tasks.findIndex((task) => task.id === taskId);
+      if (taskIndex < 0) {
+        throw new DomainEntityNotFoundError("task", taskId);
+      }
+
+      const currentTask = tasks[taskIndex];
+      if (
+        currentTask.status === "sent" &&
+        currentTask.confirmationEvidence === evidence
+      ) {
+        return currentTask;
+      }
+      if (
+        currentTask.status === "paused" &&
+        currentTask.confirmationEvidence === evidence
+      ) {
+        const now = new Date().toISOString();
+        const reconciled = greetingTaskSchema.parse({
+          ...currentTask,
+          status: "sent",
+          sentAt: currentTask.sentAt || now,
+          sendLeaseExpiresAt: undefined,
+          failureReason: "",
+          updatedAt: now
+        });
+        tasks[taskIndex] = reconciled;
+        await repositories.tasks.write(tasks);
+        return reconciled;
+      }
+      if (currentTask.status !== "sending") {
+        throw new DomainTransitionError(currentTask.status, "sent");
+      }
+      const confirmationDate = currentTask.quotaReservationDate ?? date;
+      if (!confirmationDate) {
+        throw new Error("send reservation is not valid for the confirmation date");
+      }
+
+      const usageIndex = usage.findIndex((item) => item.date === confirmationDate);
+      const currentUsage = mergeConfirmedTaskUsage(
+        usageIndex >= 0 ? usage[usageIndex] : createDefaultDailyUsage(confirmationDate),
+        tasks
+      );
+      if (currentUsage.confirmedSends >= config.dailyLimit) {
+        tasks[taskIndex] = greetingTaskSchema.parse({
+          ...currentTask,
+          status: "quota_blocked",
+          failureReason: "daily_quota_reached",
+          updatedAt: new Date().toISOString()
+        });
+        await repositories.tasks.write(tasks);
+        throw new DomainQuotaExceededError(confirmationDate, currentUsage.confirmedSends, config.dailyLimit);
+      }
+
+      const now = new Date().toISOString();
+      const sentTask = greetingTaskSchema.parse({
+        ...currentTask,
+        status: "sent",
+        confirmationEvidence: evidence,
+        sentAt: now,
+        sendLeaseExpiresAt: undefined,
+        failureReason: "",
+        updatedAt: now
+      });
+
+      tasks[taskIndex] = sentTask;
+      await repositories.tasks.write(tasks);
+      return sentTask;
+    });
+  }
+
+  async function refreshTaskSendReservation(
+    taskId: string,
+    date = getShanghaiDateKey()
+  ): Promise<GreetingTask> {
+    return queueMutation("refresh-send-reservation", async () => {
+      const [tasks, usage, config] = await Promise.all([
+        repositories.tasks.read(),
+        repositories.dailyUsage.read(),
+        repositories.config.read()
+      ]);
+      const index = tasks.findIndex((task) => task.id === taskId);
+      if (index < 0) throw new DomainEntityNotFoundError("task", taskId);
+      const current = tasks[index];
+      if (current.status !== "approved" && current.status !== "sending") {
+        throw new DomainTransitionError(current.status, "sending");
+      }
+
+      const currentUsage = mergeConfirmedTaskUsage(
+        usage.find((item) => item.date === date) ?? createDefaultDailyUsage(date),
+        tasks
+      );
+      const otherReservations = tasks.filter(
+        (task) =>
+          task.id !== taskId &&
+          task.status === "sending" &&
+          task.quotaReservationDate === date
+      ).length;
+      if (currentUsage.confirmedSends + otherReservations >= config.dailyLimit) {
+        tasks[index] = greetingTaskSchema.parse({
+          ...current,
+          status: "quota_blocked",
+          failureReason: "daily_quota_reached",
+          updatedAt: new Date().toISOString()
+        });
+        await repositories.tasks.write(tasks);
+        throw new DomainQuotaExceededError(date, currentUsage.confirmedSends, config.dailyLimit);
+      }
+
+      const next = greetingTaskSchema.parse({
+        ...current,
+        status: "sending",
+        quotaReservationDate: date,
+        sendLeaseExpiresAt: new Date(Date.now() + 2 * 60_000).toISOString(),
+        failureReason: "",
+        updatedAt: new Date().toISOString()
+      });
+      tasks[index] = next;
+      await repositories.tasks.write(tasks);
       return next;
     });
   }
@@ -414,9 +682,12 @@ export function createDomainStore(
     rejectTasks,
     transitionTask,
     getApprovedTasks,
+    claimApprovedTasksWithinQuota,
     getDailyUsage,
     getDailyUsageHistory,
     incrementConfirmedSend,
+    confirmTaskSent,
+    refreshTaskSendReservation,
     appendRunLog,
     getRunLogs
   };
@@ -502,6 +773,25 @@ function createDefaultDailyUsage(date: string): DailyUsage {
     pausedReason: "",
     updatedAt: new Date().toISOString()
   });
+}
+
+function mergeConfirmedTaskUsage(usage: DailyUsage, tasks: GreetingTask[]): DailyUsage {
+  const confirmedFromTasks = tasks.filter(
+    (task) =>
+      (task.status === "sent" || task.status === "paused") &&
+      Boolean(task.confirmationEvidence) &&
+      (task.quotaReservationDate ??
+        (task.sentAt ? getShanghaiDateKey(new Date(task.sentAt)) : "")) === usage.date
+  ).length;
+  return dailyUsageSchema.parse({
+    ...usage,
+    confirmedSends: Math.max(usage.confirmedSends, confirmedFromTasks)
+  });
+}
+
+function getSendLeaseExpiry(task: GreetingTask): Date {
+  if (task.sendLeaseExpiresAt) return new Date(task.sendLeaseExpiresAt);
+  return new Date(new Date(task.updatedAt).getTime() + 2 * 60_000);
 }
 
 function hasTaskChanged(current: GreetingTask, next: GreetingTask): boolean {

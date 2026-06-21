@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 
-import { getDomainStore } from "@/lib/domain-store";
+import { getDomainStore, getShanghaiDateKey } from "@/lib/domain-store";
 import { withApiErrorHandling } from "@/lib/http";
 
 export async function GET() {
   return withApiErrorHandling(async () => {
     const store = getDomainStore();
-    const date = getLocalDateKey();
+    const date = getShanghaiDateKey();
     const [config, usage, tasks, logs] = await Promise.all([
       store.getConfig(),
       store.getDailyUsage(date),
@@ -23,20 +23,19 @@ export async function GET() {
       .slice()
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
       .slice(0, 20);
+    const pausedReason =
+      tasks
+        .filter((task) => task.status === "paused" && task.failureReason)
+        .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]?.failureReason ??
+      usage.pausedReason;
 
     return NextResponse.json({
       date,
       config,
       usage,
+      pausedReason,
       taskStatusCounts,
       recentLogs
     });
   });
-}
-
-function getLocalDateKey(now = new Date()): string {
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0");
-  const day = String(now.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }

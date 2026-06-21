@@ -8,7 +8,12 @@
   <body>
     <main>
       <h1>BOSS 求职助手</h1>
-      <p id="status">连接本地工作台 http://localhost:3000</p>
+      <p id="status">尚未检查本地工作台</p>
+      <dl class="metrics">
+        <div><dt>已批准</dt><dd id="approvedCount">--</dd></div>
+        <div><dt>今日确认 / 上限</dt><dd id="quota">-- / --</dd></div>
+        <div><dt>暂停原因</dt><dd id="pausedReason">--</dd></div>
+      </dl>
       <button id="collectJobs">采集可见岗位</button>
       <button id="runApproved">执行已审批任务</button>
       <a href="http://localhost:3000" target="_blank">打开工作台</a>

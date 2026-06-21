@@ -173,7 +173,8 @@ describe("domain store", () => {
     await store.transitionTask("task-1", "pending_review");
     await store.transitionTask("task-1", "approved");
     await store.transitionTask("task-1", "sending");
-    await store.transitionTask("task-1", "sent");
+    await store.refreshTaskSendReservation("task-1", "2026-06-19");
+    await store.confirmTaskSent("task-1", "message:task-1", "2026-06-19");
 
     await expect(store.getTasks()).resolves.toEqual([
       expect.objectContaining({ id: "task-1", status: "sent" })
