@@ -4,10 +4,6 @@ document.getElementById("collectJobs").addEventListener("click", async () => {
   await sendToActiveTab({ type: "COLLECT_VISIBLE_JOBS" });
 });
 
-document.getElementById("collectConversations").addEventListener("click", async () => {
-  await sendToActiveTab({ type: "COLLECT_CONVERSATIONS" });
-});
-
 document.getElementById("runApproved").addEventListener("click", async () => {
   const response = await chrome.runtime.sendMessage({ type: "RUN_APPROVED_TASKS" });
   statusEl.textContent = response?.message || "已请求执行审批任务";

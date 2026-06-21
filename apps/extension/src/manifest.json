@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "BOSS 求职助手",
   "version": "0.1.0",
-  "description": "采集 BOSS 岗位和消息线索，并在审批后发送打招呼消息。",
+  "description": "采集 BOSS 岗位，并在审批后安全发送打招呼消息。",
   "permissions": ["activeTab", "tabs", "scripting"],
   "host_permissions": ["https://*.zhipin.com/*", "http://localhost:3000/*"],
   "action": {
@@ -16,7 +16,7 @@
   "content_scripts": [
     {
       "matches": ["https://*.zhipin.com/*"],
-      "js": ["job-extractor.cjs", "content.js"],
+      "js": ["job-extractor.cjs", "boss-page-adapter.cjs", "content.js"],
       "run_at": "document_idle"
     }
   ]
