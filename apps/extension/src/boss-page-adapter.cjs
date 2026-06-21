@@ -3,24 +3,39 @@
   if (typeof module === "object" && module.exports) module.exports = api;
   root.BossPageAdapter = api;
 })(typeof globalThis === "object" ? globalThis : this, function createBossPageAdapter() {
+  const RISK_SURFACE_TOKENS = ["modal", "dialog", "verify", "captcha", "login", "security", "risk", "error"];
+  const RISK_SURFACE_SELECTORS = [
+    "[role='dialog']",
+    "[aria-modal='true']",
+    "dialog",
+    ...RISK_SURFACE_TOKENS.flatMap((token) => [
+      `[class*='${token}' i]`,
+      `[data-${token}]`,
+      `[data-testid*='${token}' i]`,
+      `[data-state*='${token}' i]`,
+      `[data-type*='${token}' i]`,
+      `[data-component*='${token}' i]`,
+      `[data-name*='${token}' i]`
+    ])
+  ].join(", ");
+
   const SELECTORS = Object.freeze({
     actionable: "button, a[href], [role='button'], input[type='button'], input[type='submit'], .btn",
-    editor: "textarea, [contenteditable='true'], [contenteditable='plaintext-only'], input[type='text']",
+    editor: "textarea, [contenteditable], input[type='text']",
     preferredEditorContainer:
       "[data-chat-container], [data-message-container], [role='dialog'], .chat-dialog, .chat-container, .message-dialog, [class*='chat-dialog'], [class*='chat-container'], [class*='message-dialog']",
     history:
       "[data-chat-history], [role='log'], .chat-history, .message-list, .chat-record, [class*='chat-history'], [class*='message-list'], [class*='chat-record']",
     message:
       "[data-message], .message-item, .message-content, [class*='message-item'], [class*='message-content']",
-    editable: "textarea, input, [contenteditable='true'], [contenteditable='plaintext-only']",
-    jobDetailLink: "a[href*='/job_detail/']"
+    editable: "textarea, input, [contenteditable]",
+    jobDetailLink: "a[href*='/job_detail/']",
+    riskSurface: RISK_SURFACE_SELECTORS
   });
 
   const RISK_LABELS = ["验证码", "安全验证", "登录后继续", "账号异常", "访问过于频繁", "操作频繁", "风险提示"];
   const COMMUNICATION_LABELS = new Set(["立即沟通", "开聊", "继续沟通", "沟通"]);
   const SEND_LABELS = new Set(["发送", "打招呼", "立即发送"]);
-  const messageElementIds = new WeakMap();
-  let nextMessageElementId = 1;
 
   function normalize(text) {
     return String(text || "").replace(/\s+/g, " ").trim();
@@ -34,19 +49,44 @@
     return /jsdom/i.test(document.defaultView?.navigator?.userAgent || "");
   }
 
-  function isVisible(element) {
+  function isVisible(element, options = {}) {
     if (!element || element.nodeType !== 1 || !element.isConnected) return false;
+    const interactive = options.interactive === true;
 
     for (let current = element; current; current = current.parentElement) {
-      if (current.hidden || current.getAttribute("aria-hidden") === "true") return false;
-      const style = current.ownerDocument.defaultView?.getComputedStyle(current);
-      if (style && (style.display === "none" || style.visibility === "hidden" || style.visibility === "collapse")) {
+      if (
+        current.hidden ||
+        current.hasAttribute("inert") ||
+        current.inert === true ||
+        current.getAttribute("aria-hidden") === "true"
+      ) {
         return false;
+      }
+      const style = current.ownerDocument.defaultView?.getComputedStyle(current);
+      if (style) {
+        if (
+          style.display === "none" ||
+          style.visibility === "hidden" ||
+          style.visibility === "collapse" ||
+          Number.parseFloat(style.opacity || "1") === 0
+        ) {
+          return false;
+        }
+        if (interactive && style.pointerEvents === "none") return false;
       }
     }
 
-    if (!isJsdom(element.ownerDocument) && typeof element.getClientRects === "function") {
-      return element.getClientRects().length > 0;
+    if (typeof element.checkVisibility === "function") {
+      try {
+        if (!element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) return false;
+      } catch {
+        // Older browsers may expose a partial implementation; semantic and rect checks remain.
+      }
+    }
+
+    if (!isJsdom(element.ownerDocument) && typeof element.getBoundingClientRect === "function") {
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
     }
     return true;
   }
@@ -93,46 +133,41 @@
     const root = document.body || document.documentElement;
     if (!root) return { ok: true, element: null };
 
-    const nodeFilter = document.defaultView?.NodeFilter;
-    if (!nodeFilter) return { ok: true, element: null };
-    const walker = document.createTreeWalker(root, nodeFilter.SHOW_TEXT);
-    let textNode = walker.nextNode();
-    while (textNode) {
-      const element = textNode.parentElement;
-      const text = normalize(textNode.nodeValue);
-      const matchedLabel = RISK_LABELS.find((label) => text.includes(label));
-      if (matchedLabel && isVisible(element)) {
-        return {
-          ok: false,
-          reason: "risk_blocker",
-          details: { text, matchedLabel },
-          element
-        };
-      }
-      textNode = walker.nextNode();
-    }
-
-    const visibleElements = Array.from(root.querySelectorAll("*")).reverse();
-    for (const element of visibleElements) {
-      if (!isVisible(element) || element.childElementCount === 0) continue;
+    const findBlocker = (element) => {
+      if (!isVisible(element)) return null;
       const text = visibleText(element);
       const compactText = normalizeLabel(text);
       const matchedLabel = RISK_LABELS.find((label) => compactText.includes(label));
-      if (matchedLabel) {
+      return matchedLabel ? { text, matchedLabel } : null;
+    };
+
+    for (const surface of root.querySelectorAll(RISK_SURFACE_SELECTORS)) {
+      const blocker = findBlocker(surface);
+      if (blocker) {
         return {
           ok: false,
           reason: "risk_blocker",
-          details: { text, matchedLabel },
-          element
+          details: blocker,
+          element: surface
         };
       }
+    }
+
+    const bodyBlocker = findBlocker(root);
+    if (bodyBlocker && normalize(bodyBlocker.text).length <= 500) {
+      return {
+        ok: false,
+        reason: "risk_blocker",
+        details: bodyBlocker,
+        element: root
+      };
     }
     return { ok: true, element: null };
   }
 
   function findExactAction(document, labels) {
     const candidates = Array.from(document.querySelectorAll(SELECTORS.actionable)).filter((element) => {
-      return isVisible(element) && isEnabled(element) && labels.has(actionableLabel(element));
+      return isVisible(element, { interactive: true }) && isEnabled(element) && labels.has(actionableLabel(element));
     });
     return finderResult(candidates, { labels: Array.from(labels) });
   }
@@ -155,7 +190,9 @@
 
   function findUniqueChatEditor(document) {
     const candidates = Array.from(document.querySelectorAll(SELECTORS.editor)).filter((element) => {
-      return isVisible(element) && isEnabled(element) && !isSearchEditor(element);
+      const contenteditable = element.getAttribute("contenteditable");
+      const editable = contenteditable === null || contenteditable.toLowerCase() !== "false";
+      return isVisible(element, { interactive: true }) && isEnabled(element) && editable && !isSearchEditor(element);
     });
     const preferred = candidates.filter((element) => element.closest(SELECTORS.preferredEditorContainer));
     return finderResult(preferred.length ? preferred : candidates, {
@@ -168,7 +205,11 @@
     const value = String(text ?? "");
     editor.focus();
 
-    if (editor.matches("[contenteditable='true'], [contenteditable='plaintext-only']")) {
+    const contenteditable = editor.getAttribute("contenteditable");
+    const isContentEditable =
+      editor.isContentEditable ||
+      (contenteditable !== null && contenteditable.toLowerCase() !== "false");
+    if (isContentEditable) {
       editor.textContent = value;
       let inputEvent;
       try {
@@ -206,12 +247,18 @@
     return findExactAction(document, SEND_LABELS);
   }
 
-  function getMessageElementId(element) {
-    if (!messageElementIds.has(element)) {
-      messageElementIds.set(element, nextMessageElementId);
-      nextMessageElementId += 1;
+  function escapeAttributeValue(value) {
+    return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+  }
+
+  function getStableMessageIdentity(element) {
+    for (const attribute of ["data-message-id", "data-id", "data-msg-id", "id"]) {
+      const value = element.getAttribute(attribute);
+      if (!value) continue;
+      const selector = `[${attribute}="${escapeAttributeValue(value)}"]`;
+      return { stableId: value, selector };
     }
-    return messageElementIds.get(element);
+    return { stableId: null, selector: SELECTORS.message };
   }
 
   function findMatchingHistoryMessages(document, text, editor) {
@@ -228,7 +275,9 @@
         if (!isVisible(message)) continue;
         if (editor && (message === editor || message.contains(editor) || editor.contains(message))) continue;
         if (message.matches(SELECTORS.editable) || message.closest(SELECTORS.editable)) continue;
-        if (visibleText(message).includes(expected)) matches.push(message);
+        if (visibleText(message).includes(expected)) {
+          matches.push({ element: message, ...getStableMessageIdentity(message) });
+        }
       }
     }
     return matches;
@@ -237,38 +286,56 @@
   function captureMessageBaseline(document, text, editor) {
     const expected = normalize(text);
     const matches = findMatchingHistoryMessages(document, expected, editor);
-    const elements = new Set(matches);
-    const fingerprint = `${expected}|${matches.map(getMessageElementId).join(",")}`;
-    return { elements, count: matches.length, fingerprint };
+    const elements = new Set(matches.map((match) => match.element));
+    const identities = matches.map((match) => match.stableId);
+    const stableIds = new Set(identities.filter(Boolean));
+    const fingerprint = `${expected}|${matches.length}|${identities.map((identity) => identity || "null").join(",")}`;
+    return { elements, identities, stableIds, count: matches.length, fingerprint };
   }
 
-  function confirmMessageSent(document, text, editor, baseline = { elements: new Set(), count: 0, fingerprint: "" }) {
+  function confirmMessageSent(
+    document,
+    text,
+    editor,
+    baseline = { elements: new Set(), identities: [], stableIds: new Set(), count: 0, fingerprint: "" }
+  ) {
     const expected = normalize(text);
     const matches = findMatchingHistoryMessages(document, expected, editor);
     const baselineCount = Number.isFinite(baseline?.count) ? baseline.count : 0;
     const baselineElements = baseline?.elements instanceof Set ? baseline.elements : new Set();
-    const newMatches = matches.filter((message) => !baselineElements.has(message));
+    const baselineStableIds = baseline?.stableIds instanceof Set ? baseline.stableIds : new Set();
+    const newStableMatches = matches.filter((match) => match.stableId && !baselineStableIds.has(match.stableId));
+    const countDelta = matches.length - baselineCount;
+    const countIncreased = countDelta > 0;
 
-    if (matches.length <= baselineCount || !newMatches.length) {
+    if (!countIncreased && !newStableMatches.length) {
       return {
         ok: false,
         reason: "confirmation_missing",
         details: {
           baselineCount,
           count: matches.length,
-          fingerprint: `${expected}|${matches.map(getMessageElementId).join(",")}`
+          countDelta,
+          fingerprint: `${expected}|${matches.length}|${matches.map((match) => match.stableId || "null").join(",")}`
         }
       };
     }
-    const latestNewMatch = newMatches[newMatches.length - 1];
+    const referenceNewMatches = matches.filter((match) => !baselineElements.has(match.element));
+    const evidenceMatch =
+      newStableMatches[newStableMatches.length - 1] ||
+      referenceNewMatches[referenceNewMatches.length - 1] ||
+      matches[matches.length - 1];
     return {
       ok: true,
       evidence: {
         text: expected,
-        element: latestNewMatch,
+        element: evidenceMatch.element,
+        ...(evidenceMatch.stableId ? { stableId: evidenceMatch.stableId } : {}),
+        selector: evidenceMatch.selector,
         matchCount: matches.length,
         baselineCount,
-        fingerprint: `${expected}|${matches.map(getMessageElementId).join(",")}`
+        countDelta,
+        fingerprint: `${expected}|${matches.length}|${matches.map((match) => match.stableId || "null").join(",")}`
       }
     };
   }
@@ -353,6 +420,8 @@
 
   return {
     SELECTORS,
+    RISK_SURFACE_SELECTORS,
+    isVisible,
     detectRiskBlocker,
     findCommunicationEntry,
     findUniqueChatEditor,

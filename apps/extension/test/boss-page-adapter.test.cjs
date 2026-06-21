@@ -4,6 +4,7 @@ const { JSDOM } = require("jsdom");
 
 const adapter = require("../src/boss-page-adapter.cjs");
 const {
+  isVisible,
   detectRiskBlocker,
   findCommunicationEntry,
   findUniqueChatEditor,
@@ -27,7 +28,7 @@ test("adapter is exported through CommonJS and the global namespace", () => {
 
 test("detectRiskBlocker reports visible BOSS risk text", () => {
   for (const text of ["验证码", "安全验证", "登录后继续", "账号异常", "访问过于频繁", "操作频繁", "风险提示"]) {
-    const dom = createDom(`<main>${text}</main>`);
+    const dom = createDom(`<main class="security-error">${text}</main>`);
     const result = detectRiskBlocker(dom.window.document);
     assert.equal(result.ok, false, text);
     assert.equal(result.reason, "risk_blocker", text);
@@ -36,7 +37,7 @@ test("detectRiskBlocker reports visible BOSS risk text", () => {
 });
 
 test("detectRiskBlocker recognizes visible risk text split across elements", () => {
-  const dom = createDom("<main><strong>安全</strong><span>验证</span></main>");
+  const dom = createDom('<main role="dialog"><strong>安全</strong><span>验证</span></main>');
 
   const result = detectRiskBlocker(dom.window.document);
 
@@ -55,6 +56,52 @@ test("detectRiskBlocker ignores hidden risk text", () => {
   `);
 
   assert.deepEqual(detectRiskBlocker(dom.window.document), { ok: true, element: null });
+});
+
+test("detectRiskBlocker ignores blocker words in a long normal page", () => {
+  const normalCopy = "这是正常岗位介绍和帮助内容。".repeat(50);
+  const dom = createDom(`
+    <main>
+      <article>${normalCopy}</article>
+      <section>常见问题：收不到验证码怎么办？风险提示是什么意思？</section>
+    </main>
+  `);
+
+  assert.deepEqual(detectRiskBlocker(dom.window.document), { ok: true, element: null });
+});
+
+test("detectRiskBlocker scans visible dialog risk surfaces", () => {
+  const dom = createDom(`
+    <main>${"正常岗位内容".repeat(100)}</main>
+    <section role="dialog">操作频繁，请稍后再试</section>
+  `);
+
+  const result = detectRiskBlocker(dom.window.document);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "risk_blocker");
+  assert.equal(result.element.getAttribute("role"), "dialog");
+});
+
+test("detectRiskBlocker scans risk tokens in data attributes", () => {
+  const dom = createDom(`
+    <main>${"正常岗位内容".repeat(100)}</main>
+    <section data-state="login-error">登录后继续</section>
+  `);
+
+  const result = detectRiskBlocker(dom.window.document);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.element.getAttribute("data-state"), "login-error");
+});
+
+test("detectRiskBlocker accepts a short visible error page without a modal surface", () => {
+  const dom = createDom("<main>账号异常，请登录后继续</main>");
+
+  const result = detectRiskBlocker(dom.window.document);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "risk_blocker");
 });
 
 test("findCommunicationEntry requires an exact normalized label", () => {
@@ -105,6 +152,20 @@ test("findUniqueChatEditor reports same-priority ambiguity", () => {
   assert.equal(result.details.count, 2);
 });
 
+test("findUniqueChatEditor recognizes bare contenteditable and ignores contenteditable false", () => {
+  const dom = createDom(`
+    <section class="chat-dialog">
+      <div contenteditable="false"></div>
+      <div id="editor" contenteditable></div>
+    </section>
+  `);
+
+  const result = findUniqueChatEditor(dom.window.document);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.element.id, "editor");
+});
+
 test("setEditorText uses the native value setter and dispatches input/change", () => {
   const dom = createDom("<textarea></textarea>");
   const editor = dom.window.document.querySelector("textarea");
@@ -120,7 +181,7 @@ test("setEditorText uses the native value setter and dispatches input/change", (
 });
 
 test("setEditorText updates contenteditable with an input event fallback", () => {
-  const dom = createDom('<div contenteditable="true"></div>');
+  const dom = createDom("<div contenteditable></div>");
   const editor = dom.window.document.querySelector("div");
   let inputSeen = false;
   editor.addEventListener("input", () => {
@@ -132,6 +193,39 @@ test("setEditorText updates contenteditable with an input event fallback", () =>
   assert.equal(result.ok, true);
   assert.equal(editor.textContent, "您好");
   assert.equal(inputSeen, true);
+});
+
+test("isVisible rejects opacity zero, inert ancestors, and failed checkVisibility", () => {
+  const opacityDom = createDom('<button id="target">发送</button>');
+  const originalGetComputedStyle = opacityDom.window.getComputedStyle.bind(opacityDom.window);
+  opacityDom.window.getComputedStyle = (element) => {
+    const style = originalGetComputedStyle(element);
+    return element.id === "target" ? { ...style, opacity: "0" } : style;
+  };
+  assert.equal(isVisible(opacityDom.window.document.querySelector("#target"), { interactive: true }), false);
+
+  const inertDom = createDom('<section inert><textarea id="target"></textarea></section>');
+  assert.equal(isVisible(inertDom.window.document.querySelector("#target"), { interactive: true }), false);
+
+  const checkDom = createDom('<button id="target">发送</button>');
+  const target = checkDom.window.document.querySelector("#target");
+  let receivedOptions;
+  target.checkVisibility = (options) => {
+    receivedOptions = options;
+    return false;
+  };
+  assert.equal(isVisible(target, { interactive: true }), false);
+  assert.deepEqual(receivedOptions, { checkOpacity: true, checkVisibilityCSS: true });
+});
+
+test("interactive finders reject pointer-events none", () => {
+  const dom = createDom(`
+    <button style="pointer-events: none">发送</button>
+    <textarea style="pointer-events: none"></textarea>
+  `);
+
+  assert.equal(findUniqueSendButton(dom.window.document).reason, "missing");
+  assert.equal(findUniqueChatEditor(dom.window.document).reason, "missing");
 });
 
 test("findUniqueSendButton requires exact visible enabled labels", () => {
@@ -216,6 +310,24 @@ test("confirmMessageSent rejects a same-count rerender of matching messages", ()
   const text = "同一条问候";
   const dom = createDom(`
     <section class="chat-dialog"><textarea></textarea></section>
+    <section class="chat-history"><div class="message-item" data-message-id="same-id">${text}</div></section>
+  `);
+  const { document } = dom.window;
+  const editor = document.querySelector("textarea");
+  const baseline = captureMessageBaseline(document, text, editor);
+  const replacement = document.createElement("div");
+  replacement.className = "message-item";
+  replacement.dataset.messageId = "same-id";
+  replacement.textContent = text;
+  document.querySelector(".chat-history").replaceChildren(replacement);
+
+  assert.equal(confirmMessageSent(document, text, editor, baseline).ok, false);
+});
+
+test("confirmMessageSent rejects a same-count rerender when messages have no stable IDs", () => {
+  const text = "无ID重渲染";
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea></section>
     <section class="chat-history"><div class="message-item">${text}</div></section>
   `);
   const { document } = dom.window;
@@ -227,6 +339,72 @@ test("confirmMessageSent rejects a same-count rerender of matching messages", ()
   document.querySelector(".chat-history").replaceChildren(replacement);
 
   assert.equal(confirmMessageSent(document, text, editor, baseline).ok, false);
+});
+
+test("confirmMessageSent accepts a new stable ID even when matching count stays equal", () => {
+  const text = "稳定ID确认";
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea></section>
+    <section class="chat-history">
+      <div class="message-item" data-message-id="old-id">${text}</div>
+    </section>
+  `);
+  const { document } = dom.window;
+  const editor = document.querySelector("textarea");
+  const baseline = captureMessageBaseline(document, text, editor);
+  const replacement = document.createElement("div");
+  replacement.className = "message-item";
+  replacement.dataset.messageId = "new-id";
+  replacement.textContent = text;
+  document.querySelector(".chat-history").replaceChildren(replacement);
+
+  const result = confirmMessageSent(document, text, editor, baseline);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.evidence.element, replacement);
+  assert.equal(result.evidence.stableId, "new-id");
+  assert.equal(result.evidence.selector, '[data-message-id="new-id"]');
+  assert.equal(result.evidence.text, text);
+  assert.equal(result.evidence.countDelta, 0);
+});
+
+test("captureMessageBaseline records stable IDs and null identities", () => {
+  const text = "基线身份";
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea></section>
+    <section class="chat-history">
+      <div class="message-item" data-id="stable-one">${text}</div>
+      <div class="message-item">${text}</div>
+    </section>
+  `);
+  const { document } = dom.window;
+  const baseline = captureMessageBaseline(document, text, document.querySelector("textarea"));
+
+  assert.equal(baseline.count, 2);
+  assert.deepEqual(baseline.identities, ["stable-one", null]);
+  assert.deepEqual(Array.from(baseline.stableIds), ["stable-one"]);
+});
+
+test("confirmation evidence uses a valid attribute selector for an id stable identity", () => {
+  const text = "ID选择器";
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea></section>
+    <section class="chat-history"></section>
+  `);
+  const { document } = dom.window;
+  const editor = document.querySelector("textarea");
+  const baseline = captureMessageBaseline(document, text, editor);
+  const message = document.createElement("div");
+  message.className = "message-item";
+  message.id = "message 1";
+  message.textContent = text;
+  document.querySelector(".chat-history").append(message);
+
+  const result = confirmMessageSent(document, text, editor, baseline);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.evidence.stableId, "message 1");
+  assert.equal(result.evidence.selector, '[id="message 1"]');
 });
 
 test("confirmMessageSent returns the new match even when it is inserted before the baseline node", () => {
