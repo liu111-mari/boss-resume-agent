@@ -17,6 +17,7 @@ const filterSettingsSource = readFileSync(path.resolve(testDir, "../src/componen
 const profileEditorSource = readFileSync(path.resolve(testDir, "../src/components/profile-editor.tsx"), "utf8");
 const templateSettingsSource = readFileSync(path.resolve(testDir, "../src/components/template-settings.tsx"), "utf8");
 const approvalQueueSource = readFileSync(path.resolve(testDir, "../src/components/approval-queue.tsx"), "utf8");
+const globalCssSource = readFileSync(path.resolve(testDir, "../src/app/globals.css"), "utf8");
 
 function createConfig(overrides: Partial<FilterConfig> = {}): FilterConfig {
   return {
@@ -99,6 +100,14 @@ function createTask(overrides: Partial<GreetingTask> = {}): GreetingTask {
 }
 
 describe("greeting workbench contract", () => {
+  it("keeps the status grid inside a narrow mobile viewport", () => {
+    expect(globalCssSource).toMatch(
+      /\.status-summary\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s
+    );
+    expect(globalCssSource).toMatch(
+      /\.log-list\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s
+    );
+  });
   it("renders the required workbench sections and removes old resume or conversation UI", () => {
     const html = renderToStaticMarkup(<Home />);
 

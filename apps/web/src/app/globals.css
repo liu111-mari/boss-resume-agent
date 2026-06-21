@@ -507,7 +507,12 @@ select:disabled {
 
 .status-summary {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
+}
+
+.status-summary > * {
+  min-width: 0;
 }
 
 .status-inline {
@@ -542,11 +547,13 @@ select:disabled {
 
 .log-list {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 10px;
 }
 
 .log-item {
   display: grid;
+  min-width: 0;
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--line);
