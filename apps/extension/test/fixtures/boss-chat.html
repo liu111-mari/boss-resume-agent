@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="zh-CN">
+  <body>
+    <main class="chat-dialog" data-chat-container>
+      <section class="chat-history" data-chat-history role="log">
+        <div
+          class="message-item"
+          data-message
+          data-message-id="message-history-1"
+        >之前已发送的问候</div>
+      </section>
+
+      <label for="boss-chat-editor">输入消息</label>
+      <textarea id="boss-chat-editor"></textarea>
+      <button id="boss-send-button" type="button">发送</button>
+    </main>
+
+    <template id="risk-variant">
+      <main>
+        <section role="dialog" aria-modal="true">
+          <strong>安全</strong><span>验证</span>
+          <p>请完成验证后继续操作。</p>
+        </section>
+        <section class="chat-dialog" data-chat-container>
+          <textarea id="risk-chat-editor"></textarea>
+          <button id="risk-send-button" type="button">发送</button>
+        </section>
+      </main>
+    </template>
+  </body>
+</html>

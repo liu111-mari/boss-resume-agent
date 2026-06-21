@@ -75,6 +75,10 @@
   }
 
   function pickHr(text) {
+    const activeAdjacent = text.match(
+      /([\u4e00-\u9fa5]{1,4}(?:女士|先生|经理|HR|招聘))\s*(?:刚刚活跃|今日活跃|\d+小时内活跃|\d+日内活跃)/
+    );
+    if (activeAdjacent) return activeAdjacent[1];
     const match = text.match(/[\u4e00-\u9fa5]{1,4}(女士|先生|经理|HR|招聘)/);
     return match?.[0] || "";
   }

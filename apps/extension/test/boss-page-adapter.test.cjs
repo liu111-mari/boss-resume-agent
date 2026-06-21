@@ -1,5 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
 const { JSDOM } = require("jsdom");
 
 const adapter = require("../src/boss-page-adapter.cjs");
@@ -16,14 +18,64 @@ const {
   sendGreeting
 } = adapter;
 
+const chatFixture = readFileSync(join(__dirname, "fixtures", "boss-chat.html"), "utf8");
+
 function createDom(body) {
   return new JSDOM(`<!doctype html><html><body>${body}</body></html>`, {
     url: "https://www.zhipin.com/web/geek/job"
   });
 }
 
+function createFixtureDom() {
+  return new JSDOM(chatFixture, {
+    url: "https://www.zhipin.com/web/geek/job"
+  });
+}
+
 test("adapter is exported through CommonJS and the global namespace", () => {
   assert.equal(globalThis.BossPageAdapter, adapter);
+});
+
+test("replays a sanitized BOSS chat fixture with one editor, send action, and history", () => {
+  const dom = createFixtureDom();
+  const { document } = dom.window;
+
+  assert.deepEqual(detectRiskBlocker(document), { ok: true, element: null });
+  assert.equal(findUniqueChatEditor(document).element.id, "boss-chat-editor");
+  assert.equal(findUniqueSendButton(document).element.id, "boss-send-button");
+
+  const baseline = captureMessageBaseline(
+    document,
+    "之前已发送的问候",
+    document.querySelector("#boss-chat-editor")
+  );
+  assert.equal(baseline.count, 1);
+  assert.deepEqual(Array.from(baseline.stableIds), ["message-history-1"]);
+});
+
+test("replays the fixture risk variant and pauses before any interaction", async () => {
+  const dom = createFixtureDom();
+  const { document } = dom.window;
+  const riskVariant = document.querySelector("#risk-variant").content.cloneNode(true);
+  document.body.replaceChildren(riskVariant);
+  let clicked = false;
+  document.querySelector("#risk-send-button").addEventListener("click", () => {
+    clicked = true;
+  });
+
+  const blocker = detectRiskBlocker(document);
+  const result = await sendGreeting(
+    document,
+    dom.window,
+    { messageDraft: "您好，想了解这个岗位。" },
+    { delay: async () => {} }
+  );
+
+  assert.equal(blocker.reason, "risk_blocker");
+  assert.equal(blocker.details.matchedLabel, "安全验证");
+  assert.equal(result.reason, "risk_blocker");
+  assert.equal(result.pause, true);
+  assert.equal(clicked, false);
 });
 
 test("detectRiskBlocker reports visible BOSS risk text", () => {

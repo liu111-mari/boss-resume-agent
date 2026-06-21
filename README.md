@@ -1,60 +1,104 @@
-# BOSS 求职自动化助手
+# BOSS 打招呼工作台
 
-一个本地优先的求职工作台：Chrome 插件读取用户已登录的 BOSS 直聘页面，Next.js WebApp 负责岗位池、审批队列、消息线索、JD 解析、岗位版简历生成和 DOCX 导出。
+本项目由本地 Next.js 工作台和 Chrome MV3 插件组成。插件采集当前 BOSS 页面可见岗位；工作台按可编辑规则筛选岗位、调用本地模板或 DeepSeek 生成岗位定制问候，经过人工审批后，插件才会执行发送。
 
-## 功能边界
+系统只使用个人库中已保存的真实信息。模型输出仍需人工检查；发送后只有在聊天历史中检测到新消息证据，才会计入“今日确认发送”。
 
-- 采用“审批后自动发送”：系统可以采集岗位、生成打招呼队列，用户审批后才发送。
-- 不读取 Cookie、localStorage、密码或浏览器会话文件。
-- 不绕过验证码、风控弹窗或平台限制。
-- 不做无人值守群发。
-- 简历生成只基于真实素材改写、排序和强调，不编公司、岗位或结果数据。
-
-## 技术栈
-
-- Next.js App Router + TypeScript
-- Chrome Extension MV3
-- Vercel AI SDK + Zod structured output
-- docx 导出 Word 简历
-- shadcn 风格的轻量 UI 组件
-
-## 本地运行
+## 安装与运行
 
 ```bash
 npm install
 npm run dev
 ```
 
-访问 `http://localhost:3000`。
+工作台默认地址为 `http://localhost:3000`。
 
-## 加载 Chrome 插件
+构建插件：
 
 ```bash
 npm run extension:build
 ```
 
-然后在 Chrome 打开 `chrome://extensions`，开启开发者模式，加载 `apps/extension/dist`。
+然后打开 `chrome://extensions`：
 
-## 环境变量
+1. 开启“开发者模式”。
+2. 点击“加载已解压的扩展程序”。
+3. 选择 `apps/extension/dist`。
 
-复制 `.env.example` 到 `.env.local`：
+修改扩展源码后需要重新执行 `npm run extension:build`，并在扩展管理页重新加载。
 
-```bash
-OPENAI_API_KEY=
+## 模型配置
+
+默认使用本地模式，不发送模型请求，按模板和已启用的个人素材完成匹配与问候生成。
+
+如需使用 DeepSeek，将根目录 `.env.example` 复制为 `apps/web/.env.local`，配置：
+
+```dotenv
+GREETING_MODEL_PROVIDER=deepseek
+GREETING_MODEL_API_KEY=你的密钥
+GREETING_MODEL_BASE_URL=https://api.deepseek.com
+GREETING_MODEL_NAME=deepseek-chat
+GREETING_MODEL_INPUT_CNY_PER_MILLION=2
+GREETING_MODEL_OUTPUT_CNY_PER_MILLION=8
 ```
 
-没有 API Key 时，系统会使用本地启发式解析和模板生成，方便先跑通流程。
+要恢复本地模式：
+
+```dotenv
+GREETING_MODEL_PROVIDER=local
+GREETING_MODEL_API_KEY=
+```
+
+价格变量只用于估算成本，应按实际模型价格自行更新。API Key 仅从环境变量读取，不写入模板或诊断导出。
 
 ## 使用流程
 
-1. 打开 BOSS 推荐页或搜索页。
-2. 点击插件里的“采集可见岗位”。
-3. 回到 WebApp 查看岗位池，生成打招呼任务。
-4. 勾选任务并审批。
-5. 回到 BOSS 页面，点击插件里的“执行已审批任务”。
-6. 在消息页点击“采集消息线索”，识别 HR 是否索要简历。
-7. 在 WebApp 生成岗位版简历并下载 DOCX。
+1. 在工作台编辑并保存筛选条件，包括目标岗位、城市、薪资、关键词、黑名单、评分阈值和每日确认额度。
+2. 编辑个人信息库，维护学校、专业、毕业时间、求职方向，以及技能、项目和其他可证明素材；不确定或不想使用的素材可以停用。
+3. 编辑打招呼模板、语气和长度范围。
+4. 登录 BOSS，打开岗位搜索或推荐页面，在插件中点击“采集可见岗位”。
+5. 回到工作台运行筛选与生成，在审批队列中逐条检查、修改、批准或拒绝问候。
+6. 在插件中点击“执行已审批任务”。插件会逐条打开岗位并发送，遇到异常立即暂停。
 
-## 开源参考
+工作台中的筛选配置、个人库和模板均可继续修改，不需要改代码。
 
-执行前调研了 `get_jobs`、`auto-zhipin`、`boss-helper`、`JobPilot`、`Resume-Matcher`、`OpenResume` 等项目。当前项目只借鉴功能拆分和稳定性策略，不复制 Cookie 导出、绕验证码或无人值守群发实现。
+## 额度与安全边界
+
+- 每日额度按北京时间统计，只计算具有聊天历史确认凭证的成功发送。
+- 点击发送但未确认、失败、暂停的任务不计入已确认额度。
+- 额度是本项目的本地保护值，不代表或绕过 BOSS 平台限制。
+- 不自动切换账号。需要换号时必须由用户手动登录并重新确认当前账号和页面状态。
+- 遇到验证码、安全验证、登录失效、账号异常、操作频繁或其他风控提示时，自动流程会暂停；项目不绕过这些检查。
+- 发送前必须人工审批。页面结构不明确、发送按钮不唯一或发送结果无法确认时，不会标记为已发送。
+
+## 数据与诊断
+
+本地数据默认写入运行目录下的 `.boss-agent-data`；通过根目录命令启动时通常位于 `apps/web/.boss-agent-data`。可以在 `apps/web/.env.local` 中指定绝对目录：
+
+```dotenv
+BOSS_AGENT_DATA_DIR=D:\path\to\boss-agent-data
+```
+
+目录内包含筛选配置、个人库、模板、岗位、任务、运行日志和每日用量 JSON。请自行备份，不要提交包含个人信息的数据目录。
+
+工作台“运行状态”区域提供“导出诊断”，用于导出已脱敏的配置、任务和日志。导出文件不会包含模型 API Key，但提交问题前仍应人工检查内容。
+
+## 测试与构建
+
+```bash
+# 扩展单元测试和脱敏页面回放测试
+npm test -w @boss-agent/extension
+
+# Web 测试
+npm run test:web
+
+# 全部测试
+npm test
+
+# 类型检查、代码检查和完整构建
+npm run typecheck
+npm run lint
+npm run build
+```
+
+扩展回放夹具位于 `apps/extension/test/fixtures`，只保留测试所需的最小脱敏 DOM，不包含真实账号、公司或聊天数据。
