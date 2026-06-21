@@ -32,9 +32,11 @@ test("content script delegates greeting interactions to BossPageAdapter", () => 
   const content = fs.readFileSync(path.join(__dirname, "../src/content.js"), "utf8");
 
   assert.match(content, /BossPageAdapter\.sendGreeting\(document,\s*window,\s*message\.task/);
+  assert.match(content, /BossPageAdapter\.getVisibleJobSignature\(document/);
   assert.doesNotMatch(content, /COLLECT_CONVERSATIONS/);
   assert.doesNotMatch(content, /function\s+(collectConversations|sendGreeting|hasRiskBlocker|findEditor|setEditorText|findClickable|delay)\b/);
-  assert.doesNotMatch(content, /querySelector\(\s*["']textarea/);
+  assert.doesNotMatch(content, /\.(querySelector|querySelectorAll|closest|matches)\s*\(/);
+  assert.doesNotMatch(content, /textarea|contenteditable|job_detail/);
 });
 
 test("popup no longer exposes conversation collection", () => {

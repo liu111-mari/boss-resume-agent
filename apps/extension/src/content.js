@@ -29,12 +29,7 @@ function scheduleAutomaticJobCollection() {
   let timer;
 
   const attemptCollection = async () => {
-    const links = Array.from(document.querySelectorAll("a[href*='/job_detail/']"));
-    const signature = links
-      .slice(0, 50)
-      .map((link) => link.getAttribute("href"))
-      .filter(Boolean)
-      .join("|");
+    const signature = globalThis.BossPageAdapter.getVisibleJobSignature(document);
     if (!signature || signature === collectedSignature) return;
 
     const result = await collectVisibleJobs().catch(() => null);

@@ -9,7 +9,9 @@ const {
   findUniqueChatEditor,
   setEditorText,
   findUniqueSendButton,
+  captureMessageBaseline,
   confirmMessageSent,
+  getVisibleJobSignature,
   sendGreeting
 } = adapter;
 
@@ -165,17 +167,86 @@ test("confirmMessageSent only accepts message nodes inside chat history", () => 
   `);
   const editor = dom.window.document.querySelector("textarea");
 
-  assert.equal(confirmMessageSent(dom.window.document, text, editor).ok, false);
+  const baseline = captureMessageBaseline(dom.window.document, text, editor);
+  assert.equal(baseline.count, 0);
+  assert.equal(baseline.elements.size, 0);
+  assert.equal(typeof baseline.fingerprint, "string");
+  assert.equal(confirmMessageSent(dom.window.document, text, editor, baseline).ok, false);
 
   const message = dom.window.document.createElement("div");
   message.className = "message-item";
   message.textContent = `我 12:30 ${text} 已送达`;
   dom.window.document.querySelector(".chat-history").append(message);
 
-  const result = confirmMessageSent(dom.window.document, text, editor);
+  const result = confirmMessageSent(dom.window.document, text, editor, baseline);
   assert.equal(result.ok, true);
   assert.equal(result.evidence.text, text);
   assert.equal(result.evidence.element, message);
+});
+
+test("confirmMessageSent rejects a pre-existing identical message until a new one appears", () => {
+  const text = "你好，想沟通这个岗位";
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea></section>
+    <section class="chat-history">
+      <div class="message-item" id="old">${text}</div>
+    </section>
+  `);
+  const { document } = dom.window;
+  const editor = document.querySelector("textarea");
+  const oldMessage = document.querySelector("#old");
+  const baseline = captureMessageBaseline(document, text, editor);
+
+  assert.equal(baseline.count, 1);
+  assert.equal(baseline.elements.has(oldMessage), true);
+  assert.equal(confirmMessageSent(document, text, editor, baseline).ok, false);
+
+  const newMessage = document.createElement("div");
+  newMessage.className = "message-item";
+  newMessage.textContent = text;
+  document.querySelector(".chat-history").append(newMessage);
+
+  const result = confirmMessageSent(document, text, editor, baseline);
+  assert.equal(result.ok, true);
+  assert.equal(result.evidence.element, newMessage);
+  assert.equal(result.evidence.matchCount, 2);
+});
+
+test("confirmMessageSent rejects a same-count rerender of matching messages", () => {
+  const text = "同一条问候";
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea></section>
+    <section class="chat-history"><div class="message-item">${text}</div></section>
+  `);
+  const { document } = dom.window;
+  const editor = document.querySelector("textarea");
+  const baseline = captureMessageBaseline(document, text, editor);
+  const replacement = document.createElement("div");
+  replacement.className = "message-item";
+  replacement.textContent = text;
+  document.querySelector(".chat-history").replaceChildren(replacement);
+
+  assert.equal(confirmMessageSent(document, text, editor, baseline).ok, false);
+});
+
+test("confirmMessageSent returns the new match even when it is inserted before the baseline node", () => {
+  const text = "新增节点证据";
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea></section>
+    <section class="chat-history"><div class="message-item" id="old">${text}</div></section>
+  `);
+  const { document } = dom.window;
+  const editor = document.querySelector("textarea");
+  const baseline = captureMessageBaseline(document, text, editor);
+  const newMessage = document.createElement("div");
+  newMessage.className = "message-item";
+  newMessage.textContent = text;
+  document.querySelector(".chat-history").prepend(newMessage);
+
+  const result = confirmMessageSent(document, text, editor, baseline);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.evidence.element, newMessage);
 });
 
 test("sendGreeting opens communication, sends, and waits for history confirmation", async () => {
@@ -231,6 +302,103 @@ test("sendGreeting pauses when confirmation times out", async () => {
   assert.equal(result.ok, false);
   assert.equal(result.reason, "confirmation_timeout");
   assert.equal(result.pause, true);
+});
+
+test("sendGreeting does not accept an identical message that existed before clicking send", async () => {
+  const text = "历史里已经有的问候";
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea><button>发送</button></section>
+    <section class="chat-history"><div class="message-item">${text}</div></section>
+  `);
+  let time = 0;
+
+  const result = await sendGreeting(
+    dom.window.document,
+    dom.window,
+    { messageDraft: text },
+    {
+      delay: async (ms) => {
+        time += ms;
+      },
+      pollIntervalMs: 10,
+      timeoutMs: 20,
+      now: () => time
+    }
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "confirmation_timeout");
+});
+
+test("sendGreeting confirms a second identical message added after clicking send", async () => {
+  const text = "再次发送相同问候";
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea><button id="send">发送</button></section>
+    <section class="chat-history"><div class="message-item">${text}</div></section>
+  `);
+  const { document } = dom.window;
+  document.querySelector("#send").addEventListener("click", () => {
+    const message = document.createElement("div");
+    message.className = "message-item";
+    message.textContent = text;
+    document.querySelector(".chat-history").append(message);
+  });
+
+  const result = await sendGreeting(document, dom.window, { messageDraft: text }, {
+    delay: async () => {},
+    pollIntervalMs: 1,
+    timeoutMs: 20
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.confirmationEvidence.matchCount, 2);
+});
+
+test("sendGreeting never delays beyond the default 8000ms deadline", async () => {
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea><button>发送</button></section>
+    <section class="chat-history"></section>
+  `);
+  let time = 0;
+  let totalDelay = 0;
+  const delays = [];
+
+  const result = await sendGreeting(
+    dom.window.document,
+    dom.window,
+    { messageDraft: "不会确认" },
+    {
+      delay: async (ms) => {
+        delays.push(ms);
+        totalDelay += ms;
+        time += ms;
+      },
+      pollIntervalMs: 3000,
+      now: () => time
+    }
+  );
+
+  assert.equal(result.reason, "confirmation_timeout");
+  assert.equal(totalDelay, 8000);
+  assert.deepEqual(delays, [3000, 3000, 2000]);
+});
+
+test("getVisibleJobSignature uses visible job links and honors the limit", () => {
+  const dom = createDom(`
+    <a href="/job_detail/visible-1.html">岗位一</a>
+    <a hidden href="/job_detail/hidden.html">隐藏岗位</a>
+    <a href="/other">其他</a>
+    <a href="/job_detail/visible-2.html">岗位二</a>
+  `);
+
+  assert.equal(
+    getVisibleJobSignature(dom.window.document, 1),
+    "/job_detail/visible-1.html"
+  );
+  assert.equal(
+    getVisibleJobSignature(dom.window.document),
+    "/job_detail/visible-1.html|/job_detail/visible-2.html"
+  );
 });
 
 test("sendGreeting stops before interaction when risk is visible", async () => {

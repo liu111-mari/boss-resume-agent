@@ -12,12 +12,15 @@
       "[data-chat-history], [role='log'], .chat-history, .message-list, .chat-record, [class*='chat-history'], [class*='message-list'], [class*='chat-record']",
     message:
       "[data-message], .message-item, .message-content, [class*='message-item'], [class*='message-content']",
-    editable: "textarea, input, [contenteditable='true'], [contenteditable='plaintext-only']"
+    editable: "textarea, input, [contenteditable='true'], [contenteditable='plaintext-only']",
+    jobDetailLink: "a[href*='/job_detail/']"
   });
 
   const RISK_LABELS = ["验证码", "安全验证", "登录后继续", "账号异常", "访问过于频繁", "操作频繁", "风险提示"];
   const COMMUNICATION_LABELS = new Set(["立即沟通", "开聊", "继续沟通", "沟通"]);
   const SEND_LABELS = new Set(["发送", "打招呼", "立即发送"]);
+  const messageElementIds = new WeakMap();
+  let nextMessageElementId = 1;
 
   function normalize(text) {
     return String(text || "").replace(/\s+/g, " ").trim();
@@ -203,30 +206,81 @@
     return findExactAction(document, SEND_LABELS);
   }
 
-  function confirmMessageSent(document, text, editor) {
+  function getMessageElementId(element) {
+    if (!messageElementIds.has(element)) {
+      messageElementIds.set(element, nextMessageElementId);
+      nextMessageElementId += 1;
+    }
+    return messageElementIds.get(element);
+  }
+
+  function findMatchingHistoryMessages(document, text, editor) {
     const expected = normalize(text);
-    if (!expected) return { ok: false, reason: "confirmation_missing", details: { count: 0 } };
+    if (!expected) return [];
 
     const matches = [];
+    const seen = new Set();
     for (const history of document.querySelectorAll(SELECTORS.history)) {
       if (!isVisible(history)) continue;
       for (const message of history.querySelectorAll(SELECTORS.message)) {
+        if (seen.has(message)) continue;
+        seen.add(message);
         if (!isVisible(message)) continue;
         if (editor && (message === editor || message.contains(editor) || editor.contains(message))) continue;
         if (message.matches(SELECTORS.editable) || message.closest(SELECTORS.editable)) continue;
         if (visibleText(message).includes(expected)) matches.push(message);
       }
     }
+    return matches;
+  }
 
-    if (!matches.length) return { ok: false, reason: "confirmation_missing", details: { count: 0 } };
+  function captureMessageBaseline(document, text, editor) {
+    const expected = normalize(text);
+    const matches = findMatchingHistoryMessages(document, expected, editor);
+    const elements = new Set(matches);
+    const fingerprint = `${expected}|${matches.map(getMessageElementId).join(",")}`;
+    return { elements, count: matches.length, fingerprint };
+  }
+
+  function confirmMessageSent(document, text, editor, baseline = { elements: new Set(), count: 0, fingerprint: "" }) {
+    const expected = normalize(text);
+    const matches = findMatchingHistoryMessages(document, expected, editor);
+    const baselineCount = Number.isFinite(baseline?.count) ? baseline.count : 0;
+    const baselineElements = baseline?.elements instanceof Set ? baseline.elements : new Set();
+    const newMatches = matches.filter((message) => !baselineElements.has(message));
+
+    if (matches.length <= baselineCount || !newMatches.length) {
+      return {
+        ok: false,
+        reason: "confirmation_missing",
+        details: {
+          baselineCount,
+          count: matches.length,
+          fingerprint: `${expected}|${matches.map(getMessageElementId).join(",")}`
+        }
+      };
+    }
+    const latestNewMatch = newMatches[newMatches.length - 1];
     return {
       ok: true,
       evidence: {
         text: expected,
-        element: matches[0],
-        count: matches.length
+        element: latestNewMatch,
+        matchCount: matches.length,
+        baselineCount,
+        fingerprint: `${expected}|${matches.map(getMessageElementId).join(",")}`
       }
     };
+  }
+
+  function getVisibleJobSignature(document, limit = 50) {
+    const maxLinks = Math.max(0, Math.floor(Number(limit) || 0));
+    return Array.from(document.querySelectorAll(SELECTORS.jobDetailLink))
+      .filter(isVisible)
+      .slice(0, maxLinks)
+      .map((link) => link.getAttribute("href"))
+      .filter(Boolean)
+      .join("|");
   }
 
   function pausedFailure(reason, details) {
@@ -280,15 +334,18 @@
     if (!sendResult.ok) {
       return pausedFailure(sendResult.reason, { stage: "send_button", ...sendResult.details });
     }
+    const baseline = captureMessageBaseline(document, message, editorResult.element);
     sendResult.element.click();
 
-    const startedAt = now();
-    while (now() - startedAt <= timeoutMs) {
-      const confirmation = confirmMessageSent(document, message, editorResult.element);
+    const deadline = now() + timeoutMs;
+    while (true) {
+      const confirmation = confirmMessageSent(document, message, editorResult.element, baseline);
       if (confirmation.ok) {
         return { ok: true, confirmationEvidence: confirmation.evidence };
       }
-      await wait(pollIntervalMs);
+      const remaining = deadline - now();
+      if (remaining <= 0) break;
+      await wait(Math.min(pollIntervalMs, remaining));
     }
 
     return pausedFailure("confirmation_timeout", { timeoutMs });
@@ -301,7 +358,9 @@
     findUniqueChatEditor,
     setEditorText,
     findUniqueSendButton,
+    captureMessageBaseline,
     confirmMessageSent,
+    getVisibleJobSignature,
     sendGreeting
   };
 });
