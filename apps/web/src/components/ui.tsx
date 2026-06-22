@@ -53,20 +53,40 @@ export function FieldHint({ children }: PropsWithChildren) {
   return <p className="field-hint">{children}</p>;
 }
 
-export function SectionAnchorNav({
-  items,
-  className = ""
+export function PageHeader({
+  title,
+  description,
+  actions
 }: {
-  items: Array<{ href: string; label: string }>;
-  className?: string;
+  title: string;
+  description: string;
+  actions?: ReactNode;
 }) {
   return (
-    <nav aria-label="工作台导航" className={className}>
-      {items.map((item) => (
-        <a className="anchor-link" href={item.href} key={item.href}>
-          {item.label}
-        </a>
-      ))}
-    </nav>
+    <header className="page-header">
+      <div>
+        <h1>{title}</h1>
+        <p>{description}</p>
+      </div>
+      {actions ? <div className="page-header-actions">{actions}</div> : null}
+    </header>
+  );
+}
+
+export function EmptyState({
+  title,
+  description,
+  action
+}: {
+  title: string;
+  description: string;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="empty-state-panel">
+      <strong>{title}</strong>
+      <p>{description}</p>
+      {action}
+    </div>
   );
 }

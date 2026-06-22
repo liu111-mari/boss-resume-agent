@@ -9,10 +9,12 @@ import type { FilterConfig, GreetingTask, Profile, ProfileItem } from "@boss-age
 
 import ApprovalQueue from "@/components/approval-queue";
 import FilterSettings from "@/components/filter-settings";
-import Home from "@/app/page";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
-const pageSource = readFileSync(path.resolve(testDir, "../src/app/page.tsx"), "utf8");
+const overviewRouteSource = readFileSync(path.resolve(testDir, "../src/app/(workbench)/page.tsx"), "utf8");
+const approvalsRouteSource = readFileSync(path.resolve(testDir, "../src/app/(workbench)/approvals/page.tsx"), "utf8");
+const runsRouteSource = readFileSync(path.resolve(testDir, "../src/app/(workbench)/runs/page.tsx"), "utf8");
+const filtersPageSource = readFileSync(path.resolve(testDir, "../src/components/filters-page.tsx"), "utf8");
 const filterSettingsSource = readFileSync(path.resolve(testDir, "../src/components/filter-settings.tsx"), "utf8");
 const profileEditorSource = readFileSync(path.resolve(testDir, "../src/components/profile-editor.tsx"), "utf8");
 const templateSettingsSource = readFileSync(path.resolve(testDir, "../src/components/template-settings.tsx"), "utf8");
@@ -108,33 +110,14 @@ describe("greeting workbench contract", () => {
       /\.log-list\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s
     );
   });
-  it("renders the required workbench sections and removes old resume or conversation UI", () => {
-    const html = renderToStaticMarkup(<Home />);
-
-    expect(html).toContain("筛选设置");
-    expect(html).toContain("个人信息库");
-    expect(html).toContain("话术设置");
-    expect(html).toContain("待审批队列");
-    expect(html).toContain("运行状态");
-
-    expect(html).not.toContain("岗位版简历");
-    expect(html).not.toContain("生成简历");
-    expect(html).not.toContain("下载 DOCX");
-    expect(html).not.toContain("消息线索");
-    expect(html).not.toContain("全部刷新");
-    expect(html).toContain("刷新运行数据");
+  it("routes overview, approvals, and runs to separate page containers", () => {
+    expect(overviewRouteSource).toContain("OverviewPage");
+    expect(approvalsRouteSource).toContain("ApprovalsPage");
+    expect(runsRouteSource).toContain("RunsPage");
   });
 
-  it("renders accessible form labels for the main workbench inputs", () => {
-    const html = renderToStaticMarkup(<Home />);
-
-    expect(html).toContain(">目标职位<");
-    expect(html).toContain(">城市<");
-    expect(html).toContain(">薪资单位<");
-    expect(html).toContain(">每日打招呼上限<");
-    expect(html).toContain(">学校<");
-    expect(html).toContain(">专业<");
-    expect(html).toContain(">模板正文<");
+  it("does not keep the legacy all-in-one route", () => {
+    expect(() => readFileSync(path.resolve(testDir, "../src/app/page.tsx"), "utf8")).toThrow();
   });
 
   it("renders filter settings with a hard max of 150 for daily limit", () => {
@@ -185,24 +168,10 @@ describe("greeting workbench contract", () => {
   });
 
   it("uses local save callbacks and keeps manual refresh scoped to operational data", () => {
-    expect(pageSource).toContain("async function loadInitialData()");
-    expect(pageSource).toContain("const refreshOperationalData = useCallback");
-    expect(pageSource).not.toContain("const refreshAllData = useCallback");
-    expect(pageSource).not.toContain("全部刷新");
-    expect(pageSource).toContain("刷新运行数据");
-    expect(pageSource).toMatch(/onClick=\{\(\) => void refreshOperationalData\(\)\}/);
-
-    expect(pageSource).toMatch(/<FilterSettings[\s\S]*onSaved=/);
-    expect(pageSource).toMatch(/<ProfileEditor[\s\S]*onSaved=/);
-    expect(pageSource).toMatch(/<TemplateSettings[\s\S]*onSaved=/);
-    expect(pageSource).toMatch(/<ApprovalQueue[\s\S]*onTaskSaved=/);
-    expect(pageSource).toMatch(/<ApprovalQueue[\s\S]*onOperationalRefresh=/);
-
-    expect(pageSource).not.toContain("const saveProfileChanges");
-    expect(pageSource).not.toContain("const saveTemplateChanges");
-    expect(pageSource).not.toContain("const saveTaskDraft");
-    expect(pageSource).not.toContain("const approveSelected");
-    expect(pageSource).not.toContain("const rejectSelected");
+    expect(filtersPageSource).toContain("const refreshOperationalData = useCallback");
+    expect(filtersPageSource).not.toContain("const refreshAllData = useCallback");
+    expect(filtersPageSource).toMatch(/<FilterSettings[\s\S]*onSaved=/);
+    expect(filtersPageSource).toMatch(/<FilterSettings[\s\S]*onOperationalRefresh=/);
   });
 
   it("keeps save and run side effects inside panel components instead of calling page-wide refresh", () => {

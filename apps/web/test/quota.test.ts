@@ -102,6 +102,8 @@ describe("confirmed-send quota", () => {
   });
 
   it("returns no approved tasks when today's confirmed quota is exhausted", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-21T04:00:00.000Z"));
     const previousDataDir = process.env.BOSS_AGENT_DATA_DIR;
     const store = await makeStore();
     process.env.BOSS_AGENT_DATA_DIR = tempDir;
@@ -134,6 +136,8 @@ describe("confirmed-send quota", () => {
   });
 
   it("returns at most the remaining confirmed-send capacity", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-06-21T04:00:00.000Z"));
     const previousDataDir = process.env.BOSS_AGENT_DATA_DIR;
     const store = await makeStore();
     process.env.BOSS_AGENT_DATA_DIR = tempDir;

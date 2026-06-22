@@ -1,6 +1,14 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { fetchJson } from "@/lib/client-api";
+import {
+  fetchJson,
+  loadApprovalsPageData,
+  loadFiltersPageData,
+  loadOverviewPageData,
+  loadProfilePageData,
+  loadRunsPageData,
+  loadTemplatePageData
+} from "@/lib/client-api";
 
 describe("client api helpers", () => {
   afterEach(() => {
@@ -63,5 +71,57 @@ describe("client api helpers", () => {
       ok: true,
       count: 2
     });
+  });
+
+  it("loads only the endpoints required by each page", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      const payloads: Record<string, unknown> = {
+        "/api/jobs": { jobs: [] },
+        "/api/tasks": { tasks: [] },
+        "/api/run-summary": {
+          date: "2026-06-22",
+          config: { dailyLimit: 100 },
+          usage: { confirmedSends: 0 },
+          taskStatusCounts: {},
+          recentLogs: []
+        },
+        "/api/config": { config: {} },
+        "/api/profile": { profile: { items: [] } },
+        "/api/greeting-template": { template: {} }
+      };
+      return new Response(JSON.stringify(payloads[url]), { status: 200 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await loadOverviewPageData();
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/jobs",
+      "/api/tasks",
+      "/api/run-summary"
+    ]);
+
+    fetchMock.mockClear();
+    await loadProfilePageData();
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual(["/api/profile"]);
+
+    fetchMock.mockClear();
+    await loadTemplatePageData();
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "/api/greeting-template",
+      "/api/tasks"
+    ]);
+
+    fetchMock.mockClear();
+    await loadFiltersPageData();
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual(["/api/config"]);
+
+    fetchMock.mockClear();
+    await loadApprovalsPageData();
+    expect(fetchMock.mock.calls.map(([url]) => String(url)).sort()).toEqual(["/api/profile", "/api/tasks"]);
+
+    fetchMock.mockClear();
+    await loadRunsPageData();
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual(["/api/run-summary"]);
   });
 });

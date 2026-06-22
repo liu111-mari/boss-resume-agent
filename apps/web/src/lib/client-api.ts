@@ -39,27 +39,6 @@ type ApiErrorPayload = {
   issues?: Array<{ message?: string; path?: Array<string | number> }>;
 };
 
-export async function loadWorkbenchData(): Promise<WorkbenchData> {
-  const [configResponse, profileResponse, templateResponse, jobsResponse, tasksResponse, runSummaryResponse] =
-    await Promise.all([
-      fetchJson<{ config: FilterConfig }>("/api/config"),
-      fetchJson<{ profile: Profile }>("/api/profile"),
-      fetchJson<{ template: GreetingTemplate }>("/api/greeting-template"),
-      fetchJson<{ jobs: JobCard[] }>("/api/jobs"),
-      fetchJson<{ tasks: GreetingTask[] }>("/api/tasks"),
-      fetchJson<WorkbenchRunSummary>("/api/run-summary")
-    ]);
-
-  return {
-    config: configResponse.config,
-    profile: profileResponse.profile,
-    template: templateResponse.template,
-    jobs: jobsResponse.jobs,
-    tasks: tasksResponse.tasks,
-    runSummary: runSummaryResponse
-  };
-}
-
 export async function loadOperationalData(): Promise<WorkbenchOperationalData> {
   const [jobsResponse, tasksResponse, runSummaryResponse] = await Promise.all([
     fetchJson<{ jobs: JobCard[] }>("/api/jobs"),
@@ -72,6 +51,52 @@ export async function loadOperationalData(): Promise<WorkbenchOperationalData> {
     tasks: tasksResponse.tasks,
     runSummary: runSummaryResponse
   };
+}
+
+export async function loadOverviewPageData(): Promise<WorkbenchOperationalData> {
+  return loadOperationalData();
+}
+
+export async function loadJobsPageData(): Promise<JobCard[]> {
+  return (await fetchJson<{ jobs: JobCard[] }>("/api/jobs")).jobs;
+}
+
+export async function loadFiltersPageData(): Promise<FilterConfig> {
+  return (await fetchJson<{ config: FilterConfig }>("/api/config")).config;
+}
+
+export async function loadProfilePageData(): Promise<Profile> {
+  return (await fetchJson<{ profile: Profile }>("/api/profile")).profile;
+}
+
+export async function loadTemplatePageData(): Promise<{
+  template: GreetingTemplate;
+  tasks: GreetingTask[];
+}> {
+  const [templateResponse, tasksResponse] = await Promise.all([
+    fetchJson<{ template: GreetingTemplate }>("/api/greeting-template"),
+    fetchJson<{ tasks: GreetingTask[] }>("/api/tasks")
+  ]);
+  return { template: templateResponse.template, tasks: tasksResponse.tasks };
+}
+
+export async function loadApprovalsPageData(): Promise<{
+  profile: Profile;
+  tasks: GreetingTask[];
+}> {
+  const [profileResponse, tasksResponse] = await Promise.all([
+    fetchJson<{ profile: Profile }>("/api/profile"),
+    loadApprovalTasksPageData()
+  ]);
+  return { profile: profileResponse.profile, tasks: tasksResponse };
+}
+
+export async function loadApprovalTasksPageData(): Promise<GreetingTask[]> {
+  return (await fetchJson<{ tasks: GreetingTask[] }>("/api/tasks")).tasks;
+}
+
+export async function loadRunsPageData(): Promise<WorkbenchRunSummary> {
+  return fetchJson<WorkbenchRunSummary>("/api/run-summary");
 }
 
 export async function saveConfig(config: FilterConfig) {
