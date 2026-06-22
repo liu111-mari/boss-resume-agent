@@ -504,16 +504,18 @@ function buildScorePrompt(input: ScoreJobInput): string {
 
 function buildRefinePrompt(input: RefineGreetingInput): string {
   return [
-    "请只改写 draft 的表达，不得添加 draft 或已选素材里不存在的新事实。",
+    "请遵循 template.body 的话术结构，并根据 job.jdText 调整信息优先级；只改写 draft 的表达，不得添加 draft 或已选素材里不存在的新事实。",
     "只输出 JSON，字段必须包含 text 和 usedProfileItemIds。",
     "usedProfileItemIds 必须是已选素材 id 的子集。",
     JSON.stringify(
       {
         job: {
           title: input.job.title,
-          company: input.job.company
+          company: input.job.company,
+          jdText: input.job.jdText
         },
         template: {
+          body: input.template.body,
           tone: input.template.tone,
           minLength: input.template.minLength,
           maxLength: input.template.maxLength

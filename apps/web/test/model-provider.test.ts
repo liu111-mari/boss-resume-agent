@@ -443,6 +443,7 @@ describe("createDeepSeekGreetingModelProvider", () => {
   });
 
   it("accepts a normal refinement and returns usage metadata", async () => {
+    const calls: Array<{ init?: RequestInit }> = [];
     const provider = createDeepSeekGreetingModelProvider({
       apiKey: "test-key",
       baseUrl: "https://api.deepseek.com",
@@ -451,7 +452,9 @@ describe("createDeepSeekGreetingModelProvider", () => {
         inputCnyPerMillion: 2,
         outputCnyPerMillion: 8
       },
-      request: async () =>
+      request: async (_url, init) => {
+        calls.push({ init });
+        return (
         jsonResponse({
           choices: [
             {
@@ -469,6 +472,8 @@ describe("createDeepSeekGreetingModelProvider", () => {
             total_tokens: 720
           }
         })
+        );
+      }
     });
 
     await expect(
@@ -476,7 +481,9 @@ describe("createDeepSeekGreetingModelProvider", () => {
         draft: "你好，我想应聘数据分析师。我熟悉 SQL 和 Python 数据分析，也做过经营分析看板项目。",
         job: createJob(),
         selectedProfileItems: selectedProfileItems(),
-        template: createTemplate()
+        template: createTemplate({
+          body: "BOSS您好，我对您发布的{{jobTitle}}岗位很感兴趣。根据JD选择3项经历并以查看简历收尾。"
+        })
       })
     ).resolves.toEqual({
       text: "你好，我对贵司数据分析师岗位很感兴趣。我熟悉 SQL 和 Python 数据分析，也做过经营分析看板项目。",
@@ -489,6 +496,14 @@ describe("createDeepSeekGreetingModelProvider", () => {
         totalTokens: 720
       }
     });
+
+    const requestBody = JSON.parse(String(calls[0]?.init?.body));
+    const prompt = String(requestBody.messages[1].content);
+    expect(prompt).toContain("BOSS您好，我对您发布的{{jobTitle}}岗位很感兴趣");
+    expect(prompt).toContain("负责数据分析与报表建设，要求熟悉 SQL、Python、Tableau");
+    expect(prompt).toContain("熟悉 SQL 和 Python 数据分析");
+    expect(prompt).toContain("遵循 template.body");
+    expect(prompt).toContain("不得添加");
   });
 });
 

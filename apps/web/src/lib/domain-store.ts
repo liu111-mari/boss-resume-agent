@@ -45,14 +45,15 @@ const baseDirMutationQueues = new Map<string, Promise<unknown>>();
 const domainStoreCache = new Map<string, ReturnType<typeof createDomainStore>>();
 
 const defaultTemplate = greetingTemplateSchema.parse({
-  body: "您好，我是{{school}}{{major}}专业学生，关注到{{jobTitle}}岗位，期待进一步沟通。",
+  body:
+    "BOSS您好，我对您发布的{{jobTitle}}岗位很感兴趣。{{selfIntro}}主要工作或项目内容包括：{{projects}}。我的岗位匹配优势包括：{{matchedRequirements}}。相关技能包括：{{skills}}。详细情况您可以看下我的简历，期待您的回复！",
   tone: "专业自然",
   minLength: 30,
-  maxLength: 120,
-  maxSkills: 2,
-  maxProjects: 1,
+  maxLength: 220,
+  maxSkills: 4,
+  maxProjects: 3,
   bannedPhrases: ["海投", "群发"],
-  version: 1
+  version: 2
 });
 
 const taskTransitionMap: Record<GreetingTaskStatus, readonly GreetingTaskStatus[]> = {

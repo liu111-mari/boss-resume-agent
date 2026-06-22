@@ -200,4 +200,15 @@ describe("greeting workbench contract", () => {
     expect(approvalQueueSource).toMatch(/await rejectTasks\(/);
     expect(approvalQueueSource).toMatch(/await onOperationalRefresh\(\)/);
   });
+
+  it("edits the greeting structure separately from banned phrases", () => {
+    expect(templateSettingsSource).toContain("话术结构模板");
+    expect(templateSettingsSource).toContain("每次 DeepSeek");
+    expect(templateSettingsSource).toMatch(
+      /aria-label="话术结构模板"[\s\S]*onChange=\{\(event\) => onChange\(\{ \.\.\.template, body: event\.target\.value \}\)\}[\s\S]*value=\{template\.body\}/
+    );
+    expect(templateSettingsSource).toMatch(
+      /aria-label="禁用词"[\s\S]*bannedPhrases: parseArrayInput\(event\.target\.value\)[\s\S]*value=\{template\.bannedPhrases\.join\("\\n"\)\}/
+    );
+  });
 });

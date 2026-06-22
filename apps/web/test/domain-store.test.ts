@@ -81,6 +81,20 @@ describe("domain store", () => {
     return createDomainStore(tempDir);
   }
 
+  it("uses the editable six-part greeting structure for a fresh store", async () => {
+    const store = await makeStore();
+
+    const template = await store.getTemplate();
+
+    expect(template.version).toBe(2);
+    expect(template.body).toContain("{{jobTitle}}");
+    expect(template.body).toContain("{{selfIntro}}");
+    expect(template.body).toContain("{{projects}}");
+    expect(template.body).toContain("匹配优势");
+    expect(template.body).toContain("{{skills}}");
+    expect(template.body).toContain("详细情况您可以看下我的简历，期待您的回复");
+  });
+
   it("persists data across store reconstruction", async () => {
     const store = await makeStore();
 

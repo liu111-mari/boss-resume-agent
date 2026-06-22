@@ -111,13 +111,14 @@ export default function TemplateSettings({
       </div>
 
       <label className="field">
-        <span>模板正文</span>
+        <span>话术结构模板</span>
         <textarea
-          aria-label="模板正文"
+          aria-label="话术结构模板"
           className="textarea textarea-lg"
           onChange={(event) => onChange({ ...template, body: event.target.value })}
           value={template.body}
         />
+        <FieldHint>每次 DeepSeek 生成都会携带这套结构、当前岗位 JD 和已选个人素材。</FieldHint>
       </label>
 
       <div className="form-grid">
@@ -193,9 +194,9 @@ export default function TemplateSettings({
       </div>
 
       <label className="field">
-        <span>禁用表达</span>
+        <span>禁用词</span>
         <textarea
-          aria-label="禁用表达"
+          aria-label="禁用词"
           className="textarea"
           onChange={(event) => onChange({ ...template, bannedPhrases: parseArrayInput(event.target.value) })}
           value={template.bannedPhrases.join("\n")}
