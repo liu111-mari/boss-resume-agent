@@ -46,3 +46,14 @@ test("popup no longer exposes conversation collection", () => {
   assert.doesNotMatch(html, /collectConversations|采集消息线索/);
   assert.doesNotMatch(script, /collectConversations|COLLECT_CONVERSATIONS/);
 });
+
+test("popup injects the content scripts and retries when a BOSS tab has no receiver", () => {
+  const script = fs.readFileSync(path.join(__dirname, "../src/popup.js"), "utf8");
+
+  assert.match(script, /chrome\.scripting\.executeScript/);
+  assert.match(
+    script,
+    /files:\s*\[\s*"job-extractor\.js",\s*"boss-page-adapter\.js",\s*"content\.js"\s*\]/
+  );
+  assert.match(script, /Receiving end does not exist|Could not establish connection/);
+});

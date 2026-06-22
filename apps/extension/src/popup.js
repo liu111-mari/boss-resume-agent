@@ -4,8 +4,8 @@ const quotaEl = document.getElementById("quota");
 const pausedEl = document.getElementById("pausedReason");
 
 document.getElementById("collectJobs").addEventListener("click", async () => {
-  await sendToActiveTab({ type: "COLLECT_VISIBLE_JOBS" });
-  await refreshStatus();
+  const collectionMessage = await sendToActiveTab({ type: "COLLECT_VISIBLE_JOBS" });
+  await refreshStatus(collectionMessage);
 });
 
 document.getElementById("runApproved").addEventListener("click", async () => {
@@ -57,14 +57,33 @@ async function refreshStatus(preserveMessage = "") {
 async function sendToActiveTab(message) {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tab?.id || !tab.url?.includes("zhipin.com")) {
-    statusEl.textContent = "请先切到 BOSS 直聘页面";
-    return;
+    return "请先切到 BOSS 直聘页面";
   }
-  const response = await chrome.tabs.sendMessage(tab.id, message).catch((error) => ({
-    ok: false,
-    error: error.message
-  }));
-  statusEl.textContent = response?.message || response?.error || "操作完成";
+
+  let response;
+  try {
+    response = await chrome.tabs.sendMessage(tab.id, message);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const missingReceiver =
+      errorMessage.includes("Receiving end does not exist") ||
+      errorMessage.includes("Could not establish connection");
+    if (!missingReceiver) return errorMessage;
+
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["job-extractor.js", "boss-page-adapter.js", "content.js"]
+      });
+      response = await chrome.tabs.sendMessage(tab.id, message);
+    } catch (injectionError) {
+      const injectionMessage =
+        injectionError instanceof Error ? injectionError.message : String(injectionError);
+      return `页面脚本注入失败：${injectionMessage}`;
+    }
+  }
+
+  return response?.message || response?.error || "操作完成";
 }
 
 refreshStatus();
