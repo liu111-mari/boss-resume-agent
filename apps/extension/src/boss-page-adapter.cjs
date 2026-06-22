@@ -177,7 +177,18 @@
   }
 
   function findCommunicationEntry(document) {
-    return findExactAction(document, COMMUNICATION_LABELS);
+    const candidates = Array.from(document.querySelectorAll(SELECTORS.actionable)).filter((element) => {
+      return (
+        isVisible(element, { interactive: true }) &&
+        isEnabled(element) &&
+        COMMUNICATION_LABELS.has(actionableLabel(element))
+      );
+    });
+    const preferred = candidates.filter((element) => element.matches(".btn-startchat"));
+    return finderResult(preferred.length ? preferred : candidates, {
+      labels: Array.from(COMMUNICATION_LABELS),
+      priority: preferred.length ? "boss_start_chat" : "page"
+    });
   }
 
   function isSearchEditor(element) {

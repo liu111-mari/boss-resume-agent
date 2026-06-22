@@ -181,6 +181,31 @@ test("findCommunicationEntry reports missing and ambiguous entries", () => {
   assert.equal(result.details.count, 2);
 });
 
+test("findCommunicationEntry prefers the unique BOSS start-chat action over duplicate labels", () => {
+  const dom = createDom(`
+    <button class="toolbar-action">立即沟通</button>
+    <a id="primary-entry" class="btn btn-startchat" href="/web/geek/chat">立即沟通</a>
+  `);
+
+  const result = findCommunicationEntry(dom.window.document);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.element.id, "primary-entry");
+});
+
+test("findCommunicationEntry keeps pausing when multiple BOSS start-chat actions exist", () => {
+  const dom = createDom(`
+    <a class="btn btn-startchat" href="/web/geek/chat?id=1">立即沟通</a>
+    <a class="btn btn-startchat" href="/web/geek/chat?id=2">立即沟通</a>
+  `);
+
+  const result = findCommunicationEntry(dom.window.document);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "ambiguous");
+  assert.equal(result.details.count, 2);
+});
+
 test("findUniqueChatEditor excludes search and prefers a chat container", () => {
   const dom = createDom(`
     <input type="text" placeholder="搜索职位">
