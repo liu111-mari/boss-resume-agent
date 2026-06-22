@@ -109,17 +109,22 @@ const outerResponseSchema = z.object({
     .optional()
 });
 
+const stringArraySchema = z.preprocess(
+  (value) => (value == null ? [] : Array.isArray(value) ? value : [value]),
+  z.array(z.string())
+);
+
 const scoreContentSchema = z.object({
-  score: z.number().min(0).max(100),
-  matchedRequirements: z.array(z.string()).default([]),
-  missingRequirements: z.array(z.string()).default([]),
-  reasons: z.array(z.string()).default([]),
-  recommendedProfileFields: z.array(z.string()).default([])
+  score: z.coerce.number().min(0).max(100),
+  matchedRequirements: stringArraySchema,
+  missingRequirements: stringArraySchema,
+  reasons: stringArraySchema,
+  recommendedProfileFields: stringArraySchema
 });
 
 const refineContentSchema = z.object({
   text: z.string().min(1),
-  usedProfileItemIds: z.array(z.string()).default([])
+  usedProfileItemIds: stringArraySchema
 });
 
 export class ModelFactGuardError extends Error {
@@ -130,9 +135,17 @@ export class ModelFactGuardError extends Error {
 }
 
 export class ModelRequestError extends Error {
-  constructor(message: string, options?: { cause?: unknown }) {
+  public readonly provider?: string;
+  public readonly model?: string;
+
+  constructor(
+    message: string,
+    options?: { cause?: unknown; provider?: string; model?: string }
+  ) {
     super(message, options);
     this.name = "ModelRequestError";
+    this.provider = options?.provider;
+    this.model = options?.model;
   }
 }
 
@@ -186,7 +199,7 @@ export function createDeepSeekGreetingModelProvider(
         model: config.model,
         prompt: buildScorePrompt(input)
       });
-      const content = parseModelContent(payload, scoreContentSchema);
+      const content = parseModelContent(payload, scoreContentSchema, config.model);
       const usage = mapUsage(payload.usage);
 
       return {
@@ -205,7 +218,7 @@ export function createDeepSeekGreetingModelProvider(
         model: config.model,
         prompt: buildRefinePrompt(input)
       });
-      const content = parseModelContent(payload, refineContentSchema);
+      const content = parseModelContent(payload, refineContentSchema, config.model);
       validateUsedProfileItemIds(content.usedProfileItemIds, input.selectedProfileItems);
       assertNoUnknownFacts(content.text, input);
       const usage = mapUsage(payload.usage);
@@ -360,15 +373,28 @@ async function invokeDeepSeek(
   } catch (error) {
     if (controller.signal.aborted) {
       throw new ModelRequestError(`DeepSeek request timed out after ${input.timeoutMs}ms`, {
-        cause: error
+        cause: error,
+        provider: "deepseek",
+        model: input.model
       });
     }
 
     if (error instanceof ModelRequestError) {
-      throw error;
+      throw new ModelRequestError(error.message, {
+        cause: error,
+        provider: error.provider ?? "deepseek",
+        model: error.model ?? input.model
+      });
     }
 
-    throw error;
+    throw new ModelRequestError(
+      error instanceof Error ? error.message : "DeepSeek request failed",
+      {
+        cause: error,
+        provider: "deepseek",
+        model: input.model
+      }
+    );
   } finally {
     clearTimeout(timeoutId);
   }
@@ -388,7 +414,8 @@ async function readJsonPayload(response: Response | DeepSeekRawResponse): Promis
 
 function parseModelContent<T extends z.ZodTypeAny>(
   payload: z.infer<typeof outerResponseSchema>,
-  schema: T
+  schema: T,
+  model: string
 ): z.infer<T> {
   const rawContent = payload.choices[0]?.message.content ?? "";
 
@@ -399,7 +426,11 @@ function parseModelContent<T extends z.ZodTypeAny>(
       error instanceof SyntaxError
         ? "DeepSeek model response was not valid JSON"
         : "DeepSeek model response did not match the expected schema";
-    throw new Error(message, { cause: error });
+    throw new ModelRequestError(message, {
+      cause: error,
+      provider: "deepseek",
+      model
+    });
   }
 }
 

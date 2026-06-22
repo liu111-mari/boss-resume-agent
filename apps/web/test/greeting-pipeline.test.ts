@@ -11,6 +11,7 @@ import type {
   RefineGreetingResult,
   ScoreJobResult
 } from "@/lib/model-provider";
+import { ModelRequestError } from "@/lib/model-provider";
 
 const BASE_URL = "http://localhost";
 const FIXED_NOW = "2026-06-20T08:00:00.000Z";
@@ -635,6 +636,35 @@ describe("greeting pipeline", () => {
         jobId: "job-1",
         status: "failed",
         failureReason: "score exploded"
+      })
+    ]);
+  });
+
+  it("records the attempted DeepSeek model when score generation fails", async () => {
+    const { createGreetingPipeline } = await import("@/lib/greeting-pipeline");
+    const store = await makeStore();
+    const provider = createProvider({
+      scoreJob: vi.fn(async () => {
+        throw new ModelRequestError("DeepSeek response invalid", {
+          provider: "deepseek",
+          model: "deepseek-chat"
+        });
+      })
+    });
+
+    await createGreetingPipeline({
+      store,
+      provider,
+      now: () => FIXED_NOW
+    }).run();
+
+    await expect(store.getTasks()).resolves.toEqual([
+      expect.objectContaining({
+        status: "failed",
+        modelProvider: "deepseek",
+        modelName: "deepseek-chat",
+        scoringProvider: "deepseek",
+        scoringModel: "deepseek-chat"
       })
     ]);
   });

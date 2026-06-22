@@ -405,8 +405,25 @@ async function failTask(
   message: string
 ): Promise<GreetingPipelineRunCounts> {
   const failureReason = safeErrorDetail(error);
+  const attemptedModel =
+    error && typeof error === "object"
+      ? {
+          provider: "provider" in error && typeof error.provider === "string" ? error.provider : "",
+          model: "model" in error && typeof error.model === "string" ? error.model : ""
+        }
+      : { provider: "", model: "" };
+  const modelMetadata =
+    attemptedModel.provider && attemptedModel.model
+      ? {
+          modelProvider: attemptedModel.provider,
+          modelName: attemptedModel.model,
+          scoringProvider: attemptedModel.provider,
+          scoringModel: attemptedModel.model
+        }
+      : {};
   await context.store.transitionTask(taskId, "failed", {
-    failureReason
+    failureReason,
+    ...modelMetadata
   });
   await appendRunLog(context, {
     level: "error",

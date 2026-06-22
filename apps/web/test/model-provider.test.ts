@@ -150,6 +150,45 @@ afterEach(() => {
 });
 
 describe("createDeepSeekGreetingModelProvider", () => {
+  it("normalizes common DeepSeek JSON type drift", async () => {
+    const provider = createDeepSeekGreetingModelProvider({
+      apiKey: "test-key",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-chat",
+      request: async () =>
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  score: "82",
+                  matchedRequirements: "SQL",
+                  missingRequirements: null,
+                  reasons: ["技能匹配"],
+                  recommendedProfileFields: "skill-sql"
+                })
+              }
+            }
+          ]
+        })
+    });
+
+    await expect(
+      provider.scoreJob({
+        job: createJob(),
+        profile: createProfile(),
+        keywords: ["SQL"]
+      })
+    ).resolves.toMatchObject({
+      score: 82,
+      matchedRequirements: ["SQL"],
+      missingRequirements: [],
+      reasons: ["技能匹配"],
+      recommendedProfileFields: ["skill-sql"],
+      provider: "deepseek"
+    });
+  });
+
   it("uses structured DeepSeek output for scoring and sends the expected request", async () => {
     const calls: Array<{ url: string; init?: RequestInit; aborted: boolean }> = [];
     const provider = createDeepSeekGreetingModelProvider({
