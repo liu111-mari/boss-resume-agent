@@ -24,6 +24,12 @@ test("build emits Chrome-loadable JavaScript files instead of CJS content script
   assert.equal(fs.existsSync(path.join(dist, "job-extractor.js")), true);
   assert.equal(fs.existsSync(path.join(dist, "boss-page-adapter.js")), true);
   assert.equal(fs.existsSync(path.join(dist, "task-runner.js")), true);
+  assert.equal(fs.existsSync(path.join(dist, "workbench-bridge.js")), true);
+  assert.deepEqual(manifest.content_scripts[1], {
+    matches: ["http://localhost:3000/*"],
+    js: ["workbench-bridge.js"],
+    run_at: "document_start"
+  });
   assert.equal(
     fs.readdirSync(dist, { recursive: true }).some((name) => String(name).endsWith(".cjs")),
     false

@@ -32,10 +32,27 @@ const runner = globalThis.GreetingTaskRunner.createTaskRunner({
   },
   pacingMs: 2_500
 });
+let activeRun = null;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "RUN_APPROVED_TASKS") {
-    runner.runApprovedTasks().then(sendResponse).catch((error) => {
+    if (activeRun) {
+      sendResponse({ ok: false, reason: "already_running", message: "任务正在执行中" });
+      return false;
+    }
+
+    activeRun = runner.runApprovedTasks();
+    const currentRun = activeRun;
+    void currentRun.finally(() => {
+      if (activeRun === currentRun) activeRun = null;
+    }).catch(() => {});
+
+    if (isWorkbenchSender(sender)) {
+      sendResponse({ ok: true, reason: "started", message: "自动发送已启动，请观察 BOSS 页面" });
+      return false;
+    }
+
+    currentRun.then(sendResponse).catch((error) => {
       sendResponse({ ok: false, message: error instanceof Error ? error.message : "执行失败" });
     });
     return true;
@@ -46,6 +63,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
   return false;
 });
+
+function isWorkbenchSender(sender) {
+  try {
+    return new URL(sender?.tab?.url ?? "").origin === API_BASE;
+  } catch {
+    return false;
+  }
+}
 
 async function requestApi(path, options = {}) {
   const response = await fetch(`${API_BASE}${path}`, options);

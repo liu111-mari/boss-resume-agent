@@ -18,6 +18,11 @@
       "matches": ["https://*.zhipin.com/*"],
       "js": ["job-extractor.cjs", "boss-page-adapter.cjs", "content.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["http://localhost:3000/*"],
+      "js": ["workbench-bridge.js"],
+      "run_at": "document_start"
     }
   ]
 }

@@ -5,10 +5,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { GreetingTask, Profile } from "@boss-agent/shared";
 
 import ApprovalQueue from "@/components/approval-queue";
+import ApprovalSendControl from "@/components/approval-send-control";
 import PageFeedback from "@/components/page-feedback";
 import { PageHeader } from "@/components/ui";
 import { loadApprovalsPageData, loadApprovalTasksPageData } from "@/lib/client-api";
-import { reconcileSelectedTaskIds } from "@/lib/workbench-helpers";
+import { checkExtensionBridge, runApprovedTasksViaExtension } from "@/lib/extension-bridge";
+import { isApprovableTask, reconcileSelectedTaskIds } from "@/lib/workbench-helpers";
 
 const EMPTY_PROFILE: Profile = {
   school: "",
@@ -26,6 +28,9 @@ export default function ApprovalsPage() {
   const [rejectReason, setRejectReason] = useState("");
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
+  const [extensionConnected, setExtensionConnected] = useState(false);
+  const [isCheckingExtension, setIsCheckingExtension] = useState(true);
+  const [isRunningApproved, setIsRunningApproved] = useState(false);
 
   const applyData = useCallback((data: Awaited<ReturnType<typeof loadApprovalsPageData>>) => {
     setProfile(data.profile);
@@ -52,6 +57,13 @@ export default function ApprovalsPage() {
     void loadInitialData();
   }, [loadInitialData]);
 
+  useEffect(() => {
+    void checkExtensionBridge()
+      .then(() => setExtensionConnected(true))
+      .catch(() => setExtensionConnected(false))
+      .finally(() => setIsCheckingExtension(false));
+  }, []);
+
   const refreshTasks = useCallback(async () => {
     try {
       const nextTasks = await loadApprovalTasksPageData();
@@ -71,10 +83,40 @@ export default function ApprovalsPage() {
     [profile.items]
   );
 
+  const handleRunApproved = useCallback(async () => {
+    setIsRunningApproved(true);
+    setError("");
+    setStatus("");
+    try {
+      const result = await runApprovedTasksViaExtension();
+      if (!result.ok) throw new Error(result.message);
+      setStatus(result.message);
+      await refreshTasks();
+    } catch (cause) {
+      setExtensionConnected(false);
+      setError(cause instanceof Error ? cause.message : "自动发送启动失败");
+    } finally {
+      setIsRunningApproved(false);
+    }
+  }, [refreshTasks]);
+
+  const pendingCount = tasks.filter((task) => task.status === "pending_review").length;
+  const pausedCount = tasks.filter((task) => task.status === "paused").length;
+  const approvedCount = tasks.filter((task) => task.status === "approved").length;
+
   return (
     <>
       <PageHeader description="发送前必须人工确认；审批动作继续受现有安全逻辑约束。" title="审批队列" />
       <PageFeedback error={error} status={status} />
+      <ApprovalSendControl
+        approvedCount={approvedCount}
+        checking={isCheckingExtension}
+        connected={extensionConnected}
+        onRun={() => void handleRunApproved()}
+        pausedCount={pausedCount}
+        pendingCount={pendingCount}
+        running={isRunningApproved}
+      />
       <ApprovalQueue
         draftEdits={draftEdits}
         onDraftChange={(taskId, value) => setDraftEdits((current) => ({ ...current, [taskId]: value }))}
@@ -90,8 +132,8 @@ export default function ApprovalsPage() {
           setSelectedTaskIds([]);
           setRejectReason("");
         }}
-        onSelectAllPending={() =>
-          setSelectedTaskIds(tasks.filter((task) => task.status === "pending_review").map((task) => task.id))
+        onSelectAllApprovable={() =>
+          setSelectedTaskIds(tasks.filter(isApprovableTask).map((task) => task.id))
         }
         onStatus={setStatus}
         onTaskSaved={(savedTask) => {

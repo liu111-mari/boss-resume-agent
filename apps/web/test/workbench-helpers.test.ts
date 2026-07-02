@@ -38,9 +38,10 @@ function createTask(overrides: Partial<GreetingTask> = {}): GreetingTask {
 }
 
 describe("workbench helpers", () => {
-  it("reconciles selected ids to only current pending_review tasks", () => {
+  it("reconciles selected ids to current pending_review and paused tasks", () => {
     const tasks = [
       createTask({ id: "task-pending", status: "pending_review" }),
+      createTask({ id: "task-paused", status: "paused" }),
       createTask({ id: "task-approved", status: "approved" }),
       createTask({ id: "task-sending", status: "sending" })
     ];
@@ -48,10 +49,11 @@ describe("workbench helpers", () => {
     expect(
       reconcileSelectedTaskIds(tasks, [
         "task-pending",
+        "task-paused",
         "task-approved",
         "task-missing"
       ])
-    ).toEqual(["task-pending"]);
+    ).toEqual(["task-pending", "task-paused"]);
   });
 
   it("parses nullable number drafts without producing NaN", () => {

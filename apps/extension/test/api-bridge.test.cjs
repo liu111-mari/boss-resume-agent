@@ -76,3 +76,34 @@ test("popup injects the content scripts and retries when a BOSS tab has no recei
   );
   assert.match(script, /Receiving end does not exist|Could not establish connection/);
 });
+
+test("workbench bridge accepts only same-window localhost requests and preserves request ids", () => {
+  const bridge = fs.readFileSync(path.join(__dirname, "../src/workbench-bridge.js"), "utf8");
+
+  assert.match(bridge, /http:\/\/localhost:3000/);
+  assert.match(bridge, /event\.source\s*!==\s*window/);
+  assert.match(bridge, /event\.origin\s*!==\s*WORKBENCH_ORIGIN/);
+  assert.match(bridge, /boss-agent-workbench/);
+  assert.match(bridge, /boss-agent-extension/);
+  assert.match(bridge, /requestId/);
+  assert.match(bridge, /BOSS_AGENT_BRIDGE_PING/);
+  assert.match(bridge, /BOSS_AGENT_BRIDGE_READY/);
+});
+
+test("workbench bridge forwards only approved-task execution to the background", () => {
+  const bridge = fs.readFileSync(path.join(__dirname, "../src/workbench-bridge.js"), "utf8");
+
+  assert.match(bridge, /message\.type\s*!==\s*"RUN_APPROVED_TASKS"/);
+  assert.match(bridge, /chrome\.runtime\.sendMessage\(\{\s*type:\s*"RUN_APPROVED_TASKS"\s*\}\)/);
+  assert.match(bridge, /RUN_APPROVED_TASKS_RESULT/);
+});
+
+test("background acknowledges a batch immediately and rejects duplicate starts", () => {
+  const background = fs.readFileSync(path.join(__dirname, "../src/background.js"), "utf8");
+
+  assert.match(background, /let activeRun = null/);
+  assert.match(background, /if \(activeRun\)[\s\S]*reason: "already_running"/);
+  assert.match(background, /activeRun = runner\.runApprovedTasks\(\)/);
+  assert.match(background, /reason: "started"/);
+  assert.doesNotMatch(background, /runner\.runApprovedTasks\(\)\.then\(sendResponse\)/);
+});

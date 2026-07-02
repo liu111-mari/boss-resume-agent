@@ -3,7 +3,7 @@ import type { GreetingTask, GreetingTaskStatus, ProfileItem } from "@boss-agent/
 
 import { Panel, StatusBadge } from "@/components/ui";
 import { approveTasks, rejectTasks, updateTaskDraft } from "@/lib/client-api";
-import { reconcileSelectedTaskIds } from "@/lib/workbench-helpers";
+import { isApprovableTask, reconcileSelectedTaskIds } from "@/lib/workbench-helpers";
 
 type ApprovalQueueProps = {
   tasks: GreetingTask[];
@@ -16,7 +16,7 @@ type ApprovalQueueProps = {
   onOperationalRefresh: () => Promise<void>;
   onRejectReasonChange: (value: string) => void;
   onSelectionChange: (taskId: string, checked: boolean) => void;
-  onSelectAllPending: () => void;
+  onSelectAllApprovable: () => void;
   onSelectionReset?: () => void;
   onStatus?: (message: string) => void;
   onError?: (message: string) => void;
@@ -41,7 +41,7 @@ export default function ApprovalQueue({
   onOperationalRefresh,
   onRejectReasonChange,
   onSelectionChange,
-  onSelectAllPending,
+  onSelectAllApprovable,
   onSelectionReset,
   onStatus,
   onError
@@ -49,7 +49,7 @@ export default function ApprovalQueue({
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [savingTaskIds, setSavingTaskIds] = React.useState<string[]>([]);
   const visibleTasks = tasks.filter((task) => visibleStatuses.has(task.status));
-  const pendingReviewTasks = visibleTasks.filter((task) => task.status === "pending_review");
+  const approvableTasks = visibleTasks.filter(isApprovableTask);
   const actionableSelectedTaskIds = reconcileSelectedTaskIds(tasks, selectedTaskIds);
 
   const handleSaveDraft = React.useCallback(
@@ -114,11 +114,11 @@ export default function ApprovalQueue({
     <Panel
       id="approval-queue"
       title="待审批队列"
-      description="只保留与发送前审批相关的任务状态，重点盯住 pending_review。"
+      description="待审批任务可直接批准；暂停任务处理完原因后可重新批准。"
       actions={
         <div className="queue-toolbar">
-          <button className="button button-secondary" disabled={pendingReviewTasks.length === 0 || isSubmitting} onClick={onSelectAllPending} type="button">
-            全选待审批
+          <button className="button button-secondary" disabled={approvableTasks.length === 0 || isSubmitting} onClick={onSelectAllApprovable} type="button">
+            全选可审批
           </button>
           <button className="button button-primary" disabled={actionableSelectedTaskIds.length === 0 || isSubmitting} onClick={handleApproveSelected} type="button">
             批准选中
@@ -141,7 +141,7 @@ export default function ApprovalQueue({
 
       <div className="queue-list" aria-live="polite">
         {visibleTasks.map((task) => {
-          const canSelect = task.status === "pending_review";
+          const canSelect = isApprovableTask(task);
           const usedProfileItems = task.usedProfileItemIds
             .map((itemId) => profileItemsById.get(itemId))
             .filter((item): item is ProfileItem => Boolean(item));

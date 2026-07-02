@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { FilterConfig, GreetingTask, Profile, ProfileItem } from "@boss-agent/shared";
 
 import ApprovalQueue from "@/components/approval-queue";
+import ApprovalSendControl from "@/components/approval-send-control";
 import FilterSettings from "@/components/filter-settings";
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
@@ -19,6 +20,7 @@ const filterSettingsSource = readFileSync(path.resolve(testDir, "../src/componen
 const profileEditorSource = readFileSync(path.resolve(testDir, "../src/components/profile-editor.tsx"), "utf8");
 const templateSettingsSource = readFileSync(path.resolve(testDir, "../src/components/template-settings.tsx"), "utf8");
 const approvalQueueSource = readFileSync(path.resolve(testDir, "../src/components/approval-queue.tsx"), "utf8");
+const approvalsPageSource = readFileSync(path.resolve(testDir, "../src/components/approvals-page.tsx"), "utf8");
 const globalCssSource = readFileSync(path.resolve(testDir, "../src/app/globals.css"), "utf8");
 
 function createConfig(overrides: Partial<FilterConfig> = {}): FilterConfig {
@@ -151,7 +153,7 @@ describe("greeting workbench contract", () => {
         onRejectReasonChange={vi.fn()}
         onSelectionReset={vi.fn()}
         onSelectionChange={vi.fn()}
-        onSelectAllPending={vi.fn()}
+        onSelectAllApprovable={vi.fn()}
         onStatus={vi.fn()}
         onTaskSaved={vi.fn()}
       />
@@ -172,6 +174,50 @@ describe("greeting workbench contract", () => {
     expect(filtersPageSource).not.toContain("const refreshAllData = useCallback");
     expect(filtersPageSource).toMatch(/<FilterSettings[\s\S]*onSaved=/);
     expect(filtersPageSource).toMatch(/<FilterSettings[\s\S]*onOperationalRefresh=/);
+  });
+
+  it("allows paused tasks to be selected and re-approved", () => {
+    const html = renderToStaticMarkup(
+      <ApprovalQueue
+        profileItemsById={new Map()}
+        rejectReason=""
+        selectedTaskIds={[]}
+        tasks={[createTask({ id: "task-paused", status: "paused" })]}
+        onDraftChange={vi.fn()}
+        onOperationalRefresh={vi.fn()}
+        onRejectReasonChange={vi.fn()}
+        onSelectionChange={vi.fn()}
+        onSelectAllApprovable={vi.fn()}
+        onTaskSaved={vi.fn()}
+      />
+    );
+
+    expect(html).toContain("全选可审批");
+    expect(html).toMatch(/aria-label="选择任务-[^"]+"(?![^>]*disabled)/);
+    expect(approvalQueueSource).toContain("isApprovableTask");
+    expect(approvalsPageSource).toContain("tasks.filter(isApprovableTask)");
+  });
+
+  it("renders a prominent extension-backed batch-send control", () => {
+    const html = renderToStaticMarkup(
+      <ApprovalSendControl
+        approvedCount={42}
+        checking={false}
+        connected={true}
+        onRun={vi.fn()}
+        pausedCount={8}
+        pendingCount={0}
+        running={false}
+      />
+    );
+
+    expect(html).toContain("一键自动发送 42 条");
+    expect(html).toContain("待审批");
+    expect(html).toContain("已暂停");
+    expect(html).toContain("扩展已连接");
+    expect(approvalsPageSource).toContain("checkExtensionBridge");
+    expect(approvalsPageSource).toContain("runApprovedTasksViaExtension");
+    expect(approvalsPageSource).toMatch(/await refreshTasks\(\)/);
   });
 
   it("keeps save and run side effects inside panel components instead of calling page-wide refresh", () => {

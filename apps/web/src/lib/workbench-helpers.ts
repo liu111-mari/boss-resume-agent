@@ -12,12 +12,16 @@ type NumberParseFailure = {
 
 export type NumberParseResult<T> = NumberParseSuccess<T> | NumberParseFailure;
 
+export function isApprovableTask(task: GreetingTask): boolean {
+  return task.status === "pending_review" || task.status === "paused";
+}
+
 export function reconcileSelectedTaskIds(tasks: GreetingTask[], selected: string[]): string[] {
-  const pendingReviewIds = new Set(
-    tasks.filter((task) => task.status === "pending_review").map((task) => task.id)
+  const approvableIds = new Set(
+    tasks.filter(isApprovableTask).map((task) => task.id)
   );
 
-  return selected.filter((taskId) => pendingReviewIds.has(taskId));
+  return selected.filter((taskId) => approvableIds.has(taskId));
 }
 
 export function parseNullableNumberDraft(input: string): NumberParseResult<number | null> {
