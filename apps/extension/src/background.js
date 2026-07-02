@@ -7,7 +7,10 @@ const runner = globalThis.GreetingTaskRunner.createTaskRunner({
   createTab: (url) => chrome.tabs.create({ url, active: true }),
   waitForTab: (tabId) =>
     globalThis.GreetingTaskRunner.waitForTabComplete(chrome.tabs, tabId, 15_000),
-  sendMessage: (tabId, message) => chrome.tabs.sendMessage(tabId, message),
+  tabs: chrome.tabs,
+  inspectTab: (tabId) => sendToBossTab(tabId, { type: "INSPECT_GREETING_PAGE" }),
+  sendMessage: sendToBossTab,
+  closeTab: (tabId) => chrome.tabs.remove(tabId),
   delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   listPendingConfirmations: async () => {
     const result = await chrome.storage.local.get("pendingConfirmations");
@@ -71,5 +74,23 @@ async function requestLocalApi(path, body, method) {
       ok: false,
       error: error instanceof Error ? error.message : "无法连接本地工作台"
     };
+  }
+}
+
+async function sendToBossTab(tabId, message) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const missingReceiver =
+      errorMessage.includes("Receiving end does not exist") ||
+      errorMessage.includes("Could not establish connection");
+    if (!missingReceiver) throw error;
+
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["job-extractor.js", "boss-page-adapter.js", "content.js"]
+    });
+    return chrome.tabs.sendMessage(tabId, message);
   }
 }

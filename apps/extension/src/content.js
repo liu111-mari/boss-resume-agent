@@ -5,8 +5,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
-  if (message.type === "SEND_GREETING") {
-    globalThis.BossPageAdapter.sendGreeting(document, window, message.task)
+  if (message.type === "INSPECT_GREETING_PAGE") {
+    sendResponse(globalThis.BossPageAdapter.inspectGreetingPage(document));
+    return false;
+  }
+  if (message.type === "PREPARE_GREETING") {
+    sendResponse(globalThis.BossPageAdapter.prepareGreeting(document, window));
+    return false;
+  }
+  if (message.type === "SEND_GREETING_IN_CHAT") {
+    globalThis.BossPageAdapter.sendGreetingInChat(document, window, message.task)
       .then(sendResponse)
       .catch((error) => {
         sendResponse({ ok: false, error: error instanceof Error ? error.message : "发送失败", pause: true });

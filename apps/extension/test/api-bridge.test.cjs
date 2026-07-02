@@ -31,7 +31,12 @@ test("content script automatically collects jobs on supported BOSS job pages", (
 test("content script delegates greeting interactions to BossPageAdapter", () => {
   const content = fs.readFileSync(path.join(__dirname, "../src/content.js"), "utf8");
 
-  assert.match(content, /BossPageAdapter\.sendGreeting\(document,\s*window,\s*message\.task/);
+  assert.match(content, /INSPECT_GREETING_PAGE/);
+  assert.match(content, /PREPARE_GREETING/);
+  assert.match(content, /SEND_GREETING_IN_CHAT/);
+  assert.match(content, /BossPageAdapter\.inspectGreetingPage\(document/);
+  assert.match(content, /BossPageAdapter\.prepareGreeting\(document,\s*window/);
+  assert.match(content, /BossPageAdapter\.sendGreetingInChat\(document,\s*window,\s*message\.task/);
   assert.match(content, /BossPageAdapter\.getVisibleJobSignature\(document/);
   assert.doesNotMatch(content, /COLLECT_CONVERSATIONS/);
   assert.doesNotMatch(content, /function\s+(collectConversations|sendGreeting|hasRiskBlocker|findEditor|setEditorText|findClickable|delay)\b/);
@@ -45,6 +50,20 @@ test("popup no longer exposes conversation collection", () => {
 
   assert.doesNotMatch(html, /collectConversations|采集消息线索/);
   assert.doesNotMatch(script, /collectConversations|COLLECT_CONVERSATIONS/);
+});
+
+test("background reinjects page scripts, inspects chat targets, and closes completed task tabs", () => {
+  const background = fs.readFileSync(path.join(__dirname, "../src/background.js"), "utf8");
+
+  assert.match(background, /function\s+sendToBossTab/);
+  assert.match(background, /Receiving end does not exist|Could not establish connection/);
+  assert.match(
+    background,
+    /files:\s*\[\s*"job-extractor\.js",\s*"boss-page-adapter\.js",\s*"content\.js"\s*\]/
+  );
+  assert.match(background, /inspectTab:\s*\(tabId\).*INSPECT_GREETING_PAGE/s);
+  assert.match(background, /closeTab:\s*\(tabId\).*chrome\.tabs\.remove/s);
+  assert.match(background, /tabs:\s*chrome\.tabs/);
 });
 
 test("popup injects the content scripts and retries when a BOSS tab has no receiver", () => {

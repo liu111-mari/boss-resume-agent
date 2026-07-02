@@ -15,6 +15,9 @@ const {
   captureMessageBaseline,
   confirmMessageSent,
   getVisibleJobSignature,
+  inspectGreetingPage,
+  prepareGreeting,
+  sendGreetingInChat,
   sendGreeting
 } = adapter;
 
@@ -159,6 +162,18 @@ test("detectRiskBlocker accepts a short visible error page without a modal surfa
   assert.equal(result.reason, "risk_blocker");
 });
 
+test("detectRiskBlocker recognizes the BOSS security redirect even without blocker body text", () => {
+  const dom = new JSDOM("<!doctype html><html><head><title>请稍候 - BOSS直聘</title></head><body></body></html>", {
+    url: "https://www.zhipin.com/web/passport/zp/security.html?callbackUrl=%2Fjob_detail%2Fexample.html"
+  });
+
+  const result = detectRiskBlocker(dom.window.document);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, "risk_blocker");
+  assert.equal(result.details.matchedLabel, "security_redirect");
+});
+
 test("findCommunicationEntry requires an exact normalized label", () => {
   const dom = createDom(`
     <button> 沟通   记录 </button>
@@ -204,6 +219,61 @@ test("findCommunicationEntry keeps pausing when multiple BOSS start-chat actions
   assert.equal(result.ok, false);
   assert.equal(result.reason, "ambiguous");
   assert.equal(result.details.count, 2);
+});
+
+test("inspectGreetingPage reports a ready chat editor without requiring a communication entry", () => {
+  const dom = createDom('<section class="chat-dialog"><textarea></textarea></section>');
+
+  const result = inspectGreetingPage(dom.window.document);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state, "ready");
+});
+
+test("prepareGreeting responds before its scheduled communication click runs", () => {
+  const dom = createDom('<button id="entry" class="btn-startchat">立即沟通</button>');
+  let clicked = false;
+  let scheduled;
+  dom.window.document.querySelector("#entry").addEventListener("click", () => {
+    clicked = true;
+  });
+  dom.window.setTimeout = (callback) => {
+    scheduled = callback;
+    return 1;
+  };
+
+  const result = prepareGreeting(dom.window.document, dom.window);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state, "opening_chat");
+  assert.equal(clicked, false);
+  scheduled();
+  assert.equal(clicked, true);
+});
+
+test("sendGreetingInChat fills, sends, and confirms on an already-open chat page", async () => {
+  const text = "您好，想沟通这个岗位";
+  const dom = createDom(`
+    <section class="chat-dialog"><textarea></textarea><button id="send">发送</button></section>
+    <section class="chat-history"></section>
+  `);
+  const { document } = dom.window;
+  document.querySelector("#send").addEventListener("click", () => {
+    const message = document.createElement("div");
+    message.className = "message-item";
+    message.dataset.direction = "outgoing";
+    message.textContent = text;
+    document.querySelector(".chat-history").append(message);
+  });
+
+  const result = await sendGreetingInChat(document, dom.window, { messageDraft: text }, {
+    delay: async () => {},
+    pollIntervalMs: 1,
+    timeoutMs: 50
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.confirmationEvidence.text, text);
 });
 
 test("findUniqueChatEditor excludes search and prefers a chat container", () => {

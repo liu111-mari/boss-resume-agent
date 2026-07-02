@@ -33,6 +33,57 @@
     });
   }
 
+  async function waitForChatTarget(tabs, sourceTabId, inspectTab, delay, options = {}) {
+    const timeoutMs = options.timeoutMs ?? DEFAULT_TAB_TIMEOUT_MS;
+    const pollMs = options.pollMs ?? 250;
+    const now = options.now || Date.now;
+    const deadline = now() + timeoutMs;
+
+    while (true) {
+      const candidates = [];
+      try {
+        const sourceTab = await tabs.get(sourceTabId);
+        if (sourceTab) candidates.push(sourceTab);
+      } catch {
+        // The entry click may have replaced or closed the source tab.
+      }
+      try {
+        const openedTabs = await tabs.query({ openerTabId: sourceTabId });
+        if (Array.isArray(openedTabs)) candidates.push(...openedTabs);
+      } catch {
+        // Keep polling the source tab when opener lookup is temporarily unavailable.
+      }
+
+      const seen = new Set();
+      for (const tab of candidates) {
+        if (!tab || typeof tab.id !== "number" || seen.has(tab.id) || !isBossUrl(tab.url)) continue;
+        seen.add(tab.id);
+        let inspection;
+        try {
+          inspection = await inspectTab(tab.id);
+        } catch {
+          continue;
+        }
+        if (inspection?.ok && inspection.state === "ready") {
+          return { ok: true, tab };
+        }
+        if (inspection?.pause) return { ...inspection, tab };
+      }
+
+      const remaining = deadline - now();
+      if (remaining <= 0) {
+        return {
+          ok: false,
+          pause: true,
+          reason: "timeout",
+          code: "wait_chat_timeout",
+          error: "等待 BOSS 聊天页面超时"
+        };
+      }
+      await delay(Math.min(pollMs, remaining));
+    }
+  }
+
   function createTaskRunner(dependencies) {
     const {
       request,
@@ -40,6 +91,9 @@
       waitForTab,
       sendMessage,
       delay,
+      tabs,
+      inspectTab,
+      closeTab,
       listPendingConfirmations = async () => [],
       savePendingConfirmation = async () => {},
       removePendingConfirmation = async () => {},
@@ -87,7 +141,51 @@
       await waitForTab(tab.id);
       await delay(settleMs);
       await updateStatus(task.id, "sending");
-      return sendMessage(tab.id, { type: "SEND_GREETING", task });
+      const preparation = await sendMessage(tab.id, { type: "PREPARE_GREETING", task });
+      if (preparation?.confirmationEvidence) {
+        return { ...preparation, sourceTabId: tab.id, chatTabId: tab.id };
+      }
+      if (!preparation?.ok) return { ...preparation, sourceTabId: tab.id };
+
+      let chatTab = tab;
+      if (preparation.state === "opening_chat") {
+        if (!tabs || typeof inspectTab !== "function") {
+          return {
+            ok: false,
+            pause: true,
+            code: "wait_chat_unavailable",
+            error: "聊天页面恢复能力不可用",
+            sourceTabId: tab.id
+          };
+        }
+        const target = await waitForChatTarget(tabs, tab.id, inspectTab, delay);
+        if (!target.ok) return { ...target, sourceTabId: tab.id, chatTabId: target.tab?.id };
+        chatTab = target.tab;
+      } else if (preparation.state !== "ready") {
+        return {
+          ok: false,
+          pause: true,
+          code: "prepare_state_invalid",
+          error: "BOSS 页面准备状态无效",
+          sourceTabId: tab.id
+        };
+      }
+
+      const result = await sendMessage(chatTab.id, { type: "SEND_GREETING_IN_CHAT", task });
+      return { ...result, sourceTabId: tab.id, chatTabId: chatTab.id };
+    }
+
+    async function cleanupTaskTabs(result) {
+      if (typeof closeTab !== "function") return;
+      const tabIds = [...new Set([result?.sourceTabId, result?.chatTabId])]
+        .filter((tabId) => typeof tabId === "number");
+      for (const tabId of tabIds) {
+        try {
+          await closeTab(tabId);
+        } catch {
+          // The user or BOSS navigation may already have closed the task tab.
+        }
+      }
     }
 
     async function runApprovedTasks() {
@@ -175,7 +273,9 @@
           const evidence = normalizeConfirmationEvidence(result?.confirmationEvidence);
           const pause =
             Boolean(result?.pause) ||
-            /risk|captcha|verify|login|auth|账号|验证/i.test(String(result?.error ?? ""));
+            /risk|captcha|verify|login|auth|账号|验证/i.test(
+              String(result?.code ?? result?.error ?? "")
+            );
 
           if (result?.ok && evidence) {
             let pendingSaved = false;
@@ -224,17 +324,18 @@
             }
           } else if (pause) {
             await updateStatus(task.id, "paused", {
-              failureReason: String(result?.error ?? "risk_or_auth_pause")
+              failureReason: String(result?.code ?? result?.error ?? "risk_or_auth_pause")
             });
             return { ok: false, reason: "paused", message: "检测到验证或风险页面，任务已暂停" };
           } else {
             await updateStatus(task.id, "failed", {
               failureReason: String(
-                result?.error ?? (result?.ok ? "confirmation_missing" : "send_failed")
+                result?.code ?? result?.error ?? (result?.ok ? "confirmation_missing" : "send_failed")
               )
             });
           }
 
+          await cleanupTaskTabs(result);
           completed += 1;
           await delay(Math.max(0, pacingMs));
         }
@@ -249,9 +350,19 @@
   return {
     DEFAULT_PACING_MS,
     DEFAULT_TAB_TIMEOUT_MS,
+    waitForChatTarget,
     waitForTabComplete,
     createTaskRunner
   };
+
+  function isBossUrl(value) {
+    try {
+      const url = new URL(String(value || ""));
+      return url.protocol === "https:" && (url.hostname === "zhipin.com" || url.hostname.endsWith(".zhipin.com"));
+    } catch {
+      return false;
+    }
+  }
 
   function normalizeConfirmationEvidence(value) {
     if (typeof value === "string") return value.trim();

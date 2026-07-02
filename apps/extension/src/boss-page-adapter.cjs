@@ -137,6 +137,17 @@
     const root = document.body || document.documentElement;
     if (!root) return { ok: true, element: null };
 
+    const pathname = document.defaultView?.location?.pathname || "";
+    const title = normalizeLabel(document.title);
+    if (pathname.includes("/security.html") || title.includes("请稍候")) {
+      return {
+        ok: false,
+        reason: "risk_blocker",
+        details: { matchedLabel: "security_redirect", text: document.title || pathname },
+        element: root
+      };
+    }
+
     const findBlocker = (element) => {
       if (!isVisible(element)) return null;
       const text = visibleText(element);
@@ -380,14 +391,52 @@
       set_failed: "无法可靠写入消息输入框",
       confirmation_timeout: "发送后未在聊天记录中确认消息"
     };
-    return { ok: false, reason, error: messages[reason] || "BOSS 页面交互失败", pause: true, details };
+    const stage = details?.stage;
+    const code = reason === "risk_blocker" || reason === "confirmation_timeout"
+      ? reason
+      : stage
+        ? `${stage}_${reason}`
+        : reason;
+    return { ok: false, reason, code, error: messages[reason] || "BOSS 页面交互失败", pause: true, details };
   }
 
-  async function sendGreeting(document, window, task, options = {}) {
+  function inspectGreetingPage(document) {
+    const risk = detectRiskBlocker(document);
+    if (!risk.ok) return pausedFailure(risk.reason, risk.details);
+
+    const editorResult = findUniqueChatEditor(document);
+    if (editorResult.ok) return { ok: true, state: "ready" };
+    if (editorResult.reason !== "missing") {
+      return pausedFailure(editorResult.reason, { stage: "chat_editor", ...editorResult.details });
+    }
+
+    const entryResult = findCommunicationEntry(document);
+    if (!entryResult.ok) {
+      return pausedFailure(entryResult.reason, { stage: "communication_entry", ...entryResult.details });
+    }
+    return { ok: true, state: "entry_available" };
+  }
+
+  function prepareGreeting(document, window, options = {}) {
+    const inspection = inspectGreetingPage(document);
+    if (!inspection.ok || inspection.state === "ready") return inspection;
+
+    const entryResult = findCommunicationEntry(document);
+    if (!entryResult.ok) {
+      return pausedFailure(entryResult.reason, { stage: "communication_entry", ...entryResult.details });
+    }
+    const clickDelayMs = Math.max(0, Number(options.clickDelayMs) || 0);
+    const schedule = typeof options.schedule === "function"
+      ? options.schedule
+      : (callback, delayMs) => window.setTimeout(callback, delayMs);
+    schedule(() => entryResult.element.click(), clickDelayMs);
+    return { ok: true, state: "opening_chat" };
+  }
+
+  async function sendGreetingInChat(document, window, task, options = {}) {
     const wait = typeof options.delay === "function"
       ? options.delay
       : (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
-    const interactionDelayMs = typeof options.delay === "number" ? options.delay : 900;
     const pollIntervalMs = options.pollIntervalMs ?? 200;
     const timeoutMs = options.timeoutMs ?? 8000;
     const now = options.now || Date.now;
@@ -396,24 +445,9 @@
     const risk = detectRiskBlocker(document);
     if (!risk.ok) return pausedFailure(risk.reason, risk.details);
 
-    let editorResult = findUniqueChatEditor(document);
+    const editorResult = findUniqueChatEditor(document);
     if (!editorResult.ok) {
-      if (editorResult.reason !== "missing") {
-        return pausedFailure(editorResult.reason, { stage: "editor", ...editorResult.details });
-      }
-      const entryResult = findCommunicationEntry(document);
-      if (!entryResult.ok) {
-        return pausedFailure(entryResult.reason, { stage: "communication_entry", ...entryResult.details });
-      }
-      entryResult.element.click();
-      await wait(interactionDelayMs);
-
-      const postClickRisk = detectRiskBlocker(document);
-      if (!postClickRisk.ok) return pausedFailure(postClickRisk.reason, postClickRisk.details);
-      editorResult = findUniqueChatEditor(document);
-      if (!editorResult.ok) {
-        return pausedFailure(editorResult.reason, { stage: "editor_after_entry", ...editorResult.details });
-      }
+      return pausedFailure(editorResult.reason, { stage: "chat_editor", ...editorResult.details });
     }
 
     const setResult = setEditorText(editorResult.element, message, window);
@@ -440,6 +474,17 @@
     return pausedFailure("confirmation_timeout", { timeoutMs });
   }
 
+  async function sendGreeting(document, window, task, options = {}) {
+    const wait = typeof options.delay === "function"
+      ? options.delay
+      : (ms) => new Promise((resolve) => window.setTimeout(resolve, ms));
+    const interactionDelayMs = typeof options.delay === "number" ? options.delay : 900;
+    const preparation = prepareGreeting(document, window, { schedule: (callback) => callback() });
+    if (!preparation.ok) return preparation;
+    if (preparation.state === "opening_chat") await wait(interactionDelayMs);
+    return sendGreetingInChat(document, window, task, options);
+  }
+
   return {
     SELECTORS,
     RISK_SURFACE_SELECTORS,
@@ -452,6 +497,9 @@
     captureMessageBaseline,
     confirmMessageSent,
     getVisibleJobSignature,
+    inspectGreetingPage,
+    prepareGreeting,
+    sendGreetingInChat,
     sendGreeting
   };
 });

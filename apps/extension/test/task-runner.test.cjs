@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { createTaskRunner, waitForTabComplete } = require("../src/task-runner.cjs");
+const { createTaskRunner, waitForChatTarget, waitForTabComplete } = require("../src/task-runner.cjs");
 
 function createChromeTabsHarness() {
   const listeners = new Set();
@@ -27,6 +27,134 @@ test("tab load timeout rejects and always removes its listener", async () => {
     /tab_load_timeout/
   );
   assert.equal(harness.listeners.size, 0);
+});
+
+test("waitForChatTarget accepts a ready chat in the source tab", async () => {
+  const tabs = {
+    get: async () => ({ id: 7, url: "https://www.zhipin.com/web/geek/chat" }),
+    query: async () => []
+  };
+
+  const result = await waitForChatTarget(
+    tabs,
+    7,
+    async () => ({ ok: true, state: "ready" }),
+    async () => {}
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.tab.id, 7);
+});
+
+test("waitForChatTarget follows an opener-linked BOSS chat tab", async () => {
+  const tabs = {
+    get: async () => ({ id: 7, url: "https://www.zhipin.com/job_detail/example.html" }),
+    query: async () => [{ id: 8, openerTabId: 7, url: "https://www.zhipin.com/web/geek/chat" }]
+  };
+
+  const result = await waitForChatTarget(
+    tabs,
+    7,
+    async (tabId) => tabId === 8
+      ? { ok: true, state: "ready" }
+      : { ok: true, state: "entry_available" },
+    async () => {}
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.tab.id, 8);
+});
+
+test("waitForChatTarget retries missing receivers and stops on a risk result", async () => {
+  let attempts = 0;
+  const tabs = {
+    get: async () => ({ id: 7, url: "https://www.zhipin.com/web/geek/chat" }),
+    query: async () => []
+  };
+
+  const result = await waitForChatTarget(
+    tabs,
+    7,
+    async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error("Receiving end does not exist");
+      return { ok: false, pause: true, code: "risk_blocker", error: "检测到安全验证" };
+    },
+    async () => {},
+    { now: (() => { let time = 0; return () => (time += 100); })(), timeoutMs: 1000, pollMs: 100 }
+  );
+
+  assert.equal(attempts, 2);
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "risk_blocker");
+});
+
+test("waitForChatTarget returns a stage-specific timeout", async () => {
+  let time = 0;
+  const result = await waitForChatTarget(
+    {
+      get: async () => ({ id: 7, url: "https://www.zhipin.com/job_detail/example.html" }),
+      query: async () => []
+    },
+    7,
+    async () => ({ ok: true, state: "entry_available" }),
+    async (ms) => { time += ms; },
+    { now: () => time, timeoutMs: 20, pollMs: 10 }
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "wait_chat_timeout");
+  assert.equal(result.pause, true);
+});
+
+test("runner resumes on a new chat tab before sending the approved message", async () => {
+  const updates = [];
+  const sentMessages = [];
+  const closedTabs = [];
+  let claimed = false;
+  const runner = createTaskRunner({
+    request: async (path, options = {}) => {
+      if (path === "/api/tasks/approved") {
+        if (claimed) return { tasks: [], quota: { used: 1, limit: 5, reserved: 0, remaining: 4, blocked: false } };
+        claimed = true;
+        return {
+          tasks: [{ id: "task-1", status: "sending", detailUrl: "https://www.zhipin.com/job_detail/1", messageDraft: "您好" }],
+          quota: { used: 0, limit: 5, reserved: 1, remaining: 4, blocked: false }
+        };
+      }
+      const update = JSON.parse(options.body);
+      updates.push(update);
+      return { task: { id: update.taskId, status: update.status } };
+    },
+    createTab: async () => ({ id: 1 }),
+    waitForTab: async () => {},
+    tabs: {
+      get: async () => ({ id: 1, url: "https://www.zhipin.com/job_detail/1" }),
+      query: async () => [{ id: 2, openerTabId: 1, url: "https://www.zhipin.com/web/geek/chat" }]
+    },
+    inspectTab: async (tabId) => tabId === 2
+      ? { ok: true, state: "ready" }
+      : { ok: true, state: "entry_available" },
+    sendMessage: async (tabId, message) => {
+      sentMessages.push({ tabId, type: message.type });
+      if (message.type === "PREPARE_GREETING") return { ok: true, state: "opening_chat" };
+      return { ok: true, confirmationEvidence: "message:1" };
+    },
+    closeTab: async (tabId) => closedTabs.push(tabId),
+    delay: async () => {},
+    settleMs: 0,
+    pacingMs: 0
+  });
+
+  const result = await runner.runApprovedTasks();
+
+  assert.equal(result.reason, "completed");
+  assert.deepEqual(sentMessages, [
+    { tabId: 1, type: "PREPARE_GREETING" },
+    { tabId: 2, type: "SEND_GREETING_IN_CHAT" }
+  ]);
+  assert.deepEqual(updates.map((item) => item.status), ["sending", "sent"]);
+  assert.deepEqual(closedTabs.sort((left, right) => left - right), [1, 2]);
 });
 
 test("quota blocked stops before opening a tab", async () => {
@@ -124,7 +252,9 @@ test("a click without confirmation evidence never posts sent", async () => {
     },
     createTab: async () => ({ id: 1 }),
     waitForTab: async () => {},
-    sendMessage: async () => ({ ok: true }),
+    sendMessage: async (_tabId, message) => message.type === "PREPARE_GREETING"
+      ? { ok: true, state: "ready" }
+      : { ok: true },
     delay: async () => {}
   });
 
