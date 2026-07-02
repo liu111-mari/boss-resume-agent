@@ -211,7 +211,8 @@ describe("greeting workbench contract", () => {
       />
     );
 
-    expect(html).toContain("一键自动发送 42 条");
+    expect(html).toContain("一键平台默认打招呼 42 条");
+    expect(html).toContain("不会发送审批页中的定制话术");
     expect(html).toContain("待审批");
     expect(html).toContain("已暂停");
     expect(html).toContain("扩展已连接");

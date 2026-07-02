@@ -251,6 +251,26 @@ test("prepareGreeting responds before its scheduled communication click runs", (
   assert.equal(clicked, true);
 });
 
+test("prepareGreeting marks a missing communication entry as a pre-click failure", () => {
+  const dom = createDom("<main>岗位详情</main>");
+
+  const result = prepareGreeting(dom.window.document, dom.window);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "communication_entry_missing");
+  assert.equal(result.interactionAttempted, false);
+});
+
+test("prepareGreeting keeps risk detection batch-stopping before any click", () => {
+  const dom = createDom('<div class="dialog">请完成安全验证</div>');
+
+  const result = prepareGreeting(dom.window.document, dom.window);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "risk_blocker");
+  assert.equal(result.pause, true);
+});
+
 test("sendGreetingInChat fills, sends, and confirms on an already-open chat page", async () => {
   const text = "您好，想沟通这个岗位";
   const dom = createDom(`

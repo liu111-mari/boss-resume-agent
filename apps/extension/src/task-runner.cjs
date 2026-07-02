@@ -67,7 +67,14 @@
         if (inspection?.ok && inspection.state === "ready") {
           return { ok: true, tab };
         }
-        if (inspection?.pause) return { ...inspection, tab };
+        if (
+          inspection?.pause &&
+          /risk|captcha|verify|login|auth|账号|验证/i.test(
+            String(inspection?.code ?? inspection?.error ?? "")
+          )
+        ) {
+          return { ...inspection, tab };
+        }
       }
 
       const remaining = deadline - now();
@@ -171,8 +178,15 @@
         };
       }
 
-      const result = await sendMessage(chatTab.id, { type: "SEND_GREETING_IN_CHAT", task });
-      return { ...result, sourceTabId: tab.id, chatTabId: chatTab.id };
+      return {
+        ok: true,
+        confirmationEvidence: {
+          type: "platform_default_greeting",
+          state: "chat_ready"
+        },
+        sourceTabId: tab.id,
+        chatTabId: chatTab.id
+      };
     }
 
     async function cleanupTaskTabs(result) {
@@ -272,7 +286,7 @@
 
           const evidence = normalizeConfirmationEvidence(result?.confirmationEvidence);
           const pause =
-            Boolean(result?.pause) ||
+            (Boolean(result?.pause) && result?.interactionAttempted !== false) ||
             /risk|captcha|verify|login|auth|账号|验证/i.test(
               String(result?.code ?? result?.error ?? "")
             );

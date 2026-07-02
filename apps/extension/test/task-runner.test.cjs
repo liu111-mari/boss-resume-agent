@@ -89,6 +89,30 @@ test("waitForChatTarget retries missing receivers and stops on a risk result", a
   assert.equal(result.code, "risk_blocker");
 });
 
+test("waitForChatTarget tolerates a transient missing entry after the communication click", async () => {
+  let attempts = 0;
+  const tabs = {
+    get: async () => ({ id: 7, url: "https://www.zhipin.com/web/geek/chat" }),
+    query: async () => []
+  };
+
+  const result = await waitForChatTarget(
+    tabs,
+    7,
+    async () => {
+      attempts += 1;
+      return attempts === 1
+        ? { ok: false, pause: true, code: "communication_entry_missing" }
+        : { ok: true, state: "ready" };
+    },
+    async () => {},
+    { now: (() => { let time = 0; return () => (time += 100); })(), timeoutMs: 1000, pollMs: 100 }
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(attempts, 2);
+});
+
 test("waitForChatTarget returns a stage-specific timeout", async () => {
   let time = 0;
   const result = await waitForChatTarget(
@@ -107,7 +131,7 @@ test("waitForChatTarget returns a stage-specific timeout", async () => {
   assert.equal(result.pause, true);
 });
 
-test("runner resumes on a new chat tab before sending the approved message", async () => {
+test("runner marks a ready chat as a platform-default greeting without sending custom text", async () => {
   const updates = [];
   const sentMessages = [];
   const closedTabs = [];
@@ -138,7 +162,7 @@ test("runner resumes on a new chat tab before sending the approved message", asy
     sendMessage: async (tabId, message) => {
       sentMessages.push({ tabId, type: message.type });
       if (message.type === "PREPARE_GREETING") return { ok: true, state: "opening_chat" };
-      return { ok: true, confirmationEvidence: "message:1" };
+      throw new Error("custom greeting send must not run");
     },
     closeTab: async (tabId) => closedTabs.push(tabId),
     delay: async () => {},
@@ -149,12 +173,70 @@ test("runner resumes on a new chat tab before sending the approved message", asy
   const result = await runner.runApprovedTasks();
 
   assert.equal(result.reason, "completed");
-  assert.deepEqual(sentMessages, [
-    { tabId: 1, type: "PREPARE_GREETING" },
-    { tabId: 2, type: "SEND_GREETING_IN_CHAT" }
-  ]);
+  assert.deepEqual(sentMessages, [{ tabId: 1, type: "PREPARE_GREETING" }]);
   assert.deepEqual(updates.map((item) => item.status), ["sending", "sent"]);
+  assert.deepEqual(JSON.parse(updates[1].confirmationEvidence), {
+    type: "platform_default_greeting",
+    state: "chat_ready"
+  });
   assert.deepEqual(closedTabs.sort((left, right) => left - right), [1, 2]);
+});
+
+test("a pre-click page mismatch fails one task and continues the approved batch", async () => {
+  const updates = [];
+  const preparedTaskIds = [];
+  const tasks = [
+    { id: "task-1", status: "sending", detailUrl: "https://www.zhipin.com/job_detail/1" },
+    { id: "task-2", status: "sending", detailUrl: "https://www.zhipin.com/job_detail/2" }
+  ];
+  let claimed = 0;
+  let opened = 0;
+  const runner = createTaskRunner({
+    request: async (path, options = {}) => {
+      if (path === "/api/tasks/approved") {
+        if (claimed >= tasks.length) {
+          return { tasks: [], quota: { used: 1, limit: 5, reserved: 0, remaining: 4, blocked: false } };
+        }
+        const task = tasks[claimed++];
+        return {
+          tasks: [task],
+          quota: { used: 0, limit: 5, reserved: 1, remaining: 4, blocked: false }
+        };
+      }
+      const update = JSON.parse(options.body);
+      updates.push(update);
+      return { task: { id: update.taskId, status: update.status } };
+    },
+    createTab: async () => ({ id: ++opened }),
+    waitForTab: async () => {},
+    sendMessage: async (_tabId, message) => {
+      preparedTaskIds.push(message.task.id);
+      return message.task.id === "task-1"
+        ? {
+            ok: false,
+            pause: true,
+            interactionAttempted: false,
+            code: "communication_entry_missing",
+            error: "未找到沟通入口"
+          }
+        : { ok: true, state: "ready" };
+    },
+    closeTab: async () => {},
+    delay: async () => {},
+    settleMs: 0,
+    pacingMs: 0
+  });
+
+  const result = await runner.runApprovedTasks();
+
+  assert.equal(result.reason, "completed");
+  assert.deepEqual(preparedTaskIds, ["task-1", "task-2"]);
+  assert.deepEqual(updates.map((item) => [item.taskId, item.status]), [
+    ["task-1", "sending"],
+    ["task-1", "failed"],
+    ["task-2", "sending"],
+    ["task-2", "sent"]
+  ]);
 });
 
 test("quota blocked stops before opening a tab", async () => {
@@ -233,7 +315,7 @@ test("risk pause marks paused and stops the remaining loop", async () => {
   assert.deepEqual(updates.map((item) => item.status), ["sending", "paused"]);
 });
 
-test("a click without confirmation evidence never posts sent", async () => {
+test("an already-ready chat is sufficient evidence for a platform-default greeting", async () => {
   const updates = [];
   let claimed = false;
   const runner = createTaskRunner({
@@ -252,14 +334,15 @@ test("a click without confirmation evidence never posts sent", async () => {
     },
     createTab: async () => ({ id: 1 }),
     waitForTab: async () => {},
-    sendMessage: async (_tabId, message) => message.type === "PREPARE_GREETING"
-      ? { ok: true, state: "ready" }
-      : { ok: true },
+    sendMessage: async (_tabId, message) => {
+      assert.equal(message.type, "PREPARE_GREETING");
+      return { ok: true, state: "ready" };
+    },
     delay: async () => {}
   });
 
   await runner.runApprovedTasks();
-  assert.deepEqual(updates.map((item) => item.status), ["sending", "failed"]);
+  assert.deepEqual(updates.map((item) => item.status), ["sending", "sent"]);
 });
 
 test("a malformed claimed task response stops before opening a tab", async () => {

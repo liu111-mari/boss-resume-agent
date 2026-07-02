@@ -26,8 +26,8 @@ export default function ApprovalSendControl({
   return (
     <Panel
       id="approval-send-control"
-      title="自动发送"
-      description="确认列表无误后，由浏览器扩展依次打开岗位并发送已批准话术。"
+      title="平台默认招呼"
+      description="确认列表无误后，扩展会逐个点击 BOSS 的沟通入口；不会发送审批页中的定制话术。"
       actions={
         <button
           className="button button-primary"
@@ -35,7 +35,7 @@ export default function ApprovalSendControl({
           onClick={onRun}
           type="button"
         >
-          {running ? "正在自动发送…" : `一键自动发送 ${approvedCount} 条`}
+          {running ? "正在平台打招呼…" : `一键平台默认打招呼 ${approvedCount} 条`}
         </button>
       }
     >

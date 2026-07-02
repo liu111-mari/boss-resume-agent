@@ -419,18 +419,22 @@
 
   function prepareGreeting(document, window, options = {}) {
     const inspection = inspectGreetingPage(document);
-    if (!inspection.ok || inspection.state === "ready") return inspection;
+    if (!inspection.ok) return { ...inspection, interactionAttempted: false };
+    if (inspection.state === "ready") return inspection;
 
     const entryResult = findCommunicationEntry(document);
     if (!entryResult.ok) {
-      return pausedFailure(entryResult.reason, { stage: "communication_entry", ...entryResult.details });
+      return {
+        ...pausedFailure(entryResult.reason, { stage: "communication_entry", ...entryResult.details }),
+        interactionAttempted: false
+      };
     }
     const clickDelayMs = Math.max(0, Number(options.clickDelayMs) || 0);
     const schedule = typeof options.schedule === "function"
       ? options.schedule
       : (callback, delayMs) => window.setTimeout(callback, delayMs);
     schedule(() => entryResult.element.click(), clickDelayMs);
-    return { ok: true, state: "opening_chat" };
+    return { ok: true, state: "opening_chat", interactionAttempted: true };
   }
 
   async function sendGreetingInChat(document, window, task, options = {}) {
