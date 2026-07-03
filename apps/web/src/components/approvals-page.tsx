@@ -2,13 +2,13 @@
 
 import React from "react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { GreetingTask, Profile } from "@boss-agent/shared";
+import type { GreetingTask, JobCard, Profile } from "@boss-agent/shared";
 
 import ApprovalQueue from "@/components/approval-queue";
 import ApprovalSendControl from "@/components/approval-send-control";
 import PageFeedback from "@/components/page-feedback";
 import { PageHeader } from "@/components/ui";
-import { loadApprovalsPageData, loadApprovalTasksPageData } from "@/lib/client-api";
+import { loadApprovalOperationalData, loadApprovalsPageData } from "@/lib/client-api";
 import { checkExtensionBridge, runApprovedTasksViaExtension } from "@/lib/extension-bridge";
 import { isApprovableTask, reconcileSelectedTaskIds } from "@/lib/workbench-helpers";
 
@@ -22,6 +22,9 @@ const EMPTY_PROFILE: Profile = {
 
 export default function ApprovalsPage() {
   const [tasks, setTasks] = useState<GreetingTask[]>([]);
+  const [jobs, setJobs] = useState<JobCard[]>([]);
+  const [positiveTerms, setPositiveTerms] = useState<string[]>([]);
+  const [negativeTerms, setNegativeTerms] = useState<string[]>([]);
   const [profile, setProfile] = useState<Profile>(EMPTY_PROFILE);
   const [draftEdits, setDraftEdits] = useState<Record<string, string>>({});
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
@@ -35,6 +38,9 @@ export default function ApprovalsPage() {
   const applyData = useCallback((data: Awaited<ReturnType<typeof loadApprovalsPageData>>) => {
     setProfile(data.profile);
     setTasks(data.tasks);
+    setJobs(data.jobs);
+    setPositiveTerms([...data.config.targetTitles, ...data.config.requiredKeywords]);
+    setNegativeTerms(data.config.excludedKeywords);
     setSelectedTaskIds((current) => reconcileSelectedTaskIds(data.tasks, current));
     setDraftEdits((current) =>
       Object.fromEntries(
@@ -66,8 +72,9 @@ export default function ApprovalsPage() {
 
   const refreshTasks = useCallback(async () => {
     try {
-      const nextTasks = await loadApprovalTasksPageData();
+      const { jobs: nextJobs, tasks: nextTasks } = await loadApprovalOperationalData();
       setTasks(nextTasks);
+      setJobs(nextJobs);
       setSelectedTaskIds((current) => reconcileSelectedTaskIds(nextTasks, current));
       setDraftEdits((current) =>
         Object.fromEntries(nextTasks.map((task) => [task.id, current[task.id] ?? task.messageDraft]))
@@ -78,10 +85,16 @@ export default function ApprovalsPage() {
     }
   }, []);
 
+  useEffect(() => {
+    window.addEventListener("focus", refreshTasks);
+    return () => window.removeEventListener("focus", refreshTasks);
+  }, [refreshTasks]);
+
   const profileItemsById = useMemo(
     () => new Map(profile.items.map((item) => [item.id, item])),
     [profile.items]
   );
+  const jobsById = useMemo(() => new Map(jobs.map((job) => [job.id, job])), [jobs]);
 
   const handleRunApproved = useCallback(async () => {
     setIsRunningApproved(true);
@@ -118,6 +131,9 @@ export default function ApprovalsPage() {
         running={isRunningApproved}
       />
       <ApprovalQueue
+        jobsById={jobsById}
+        negativeTerms={negativeTerms}
+        positiveTerms={positiveTerms}
         draftEdits={draftEdits}
         onDraftChange={(taskId, value) => setDraftEdits((current) => ({ ...current, [taskId]: value }))}
         onError={setError}

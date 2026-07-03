@@ -2,12 +2,14 @@
 
 import React from "react";
 import { useEffect, useMemo, useState } from "react";
-import type { JobCard, PreferenceFocusField } from "@boss-agent/shared";
+import type { FilterConfig, JobCard, PreferenceFocusField } from "@boss-agent/shared";
 
+import JobQuickView from "@/components/job-quick-view";
 import PageFeedback from "@/components/page-feedback";
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
 import {
   loadJobsPageData,
+  loadFiltersPageData,
   submitJobFeedback,
   undoJobFeedback,
   type JobFeedbackAction
@@ -27,13 +29,27 @@ export default function JobsPage({ initialJobs }: { initialJobs?: JobCard[] }) {
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [lastFeedbackIds, setLastFeedbackIds] = useState<string[]>([]);
+  const [filterConfig, setFilterConfig] = useState<FilterConfig | null>(null);
 
   useEffect(() => {
-    if (initialJobs) return;
-    void loadJobsPageData().then(setJobs).catch((cause) => {
-      setError(cause instanceof Error ? cause.message : "岗位加载失败");
-    });
+    const jobsRequest = initialJobs ? Promise.resolve(initialJobs) : loadJobsPageData();
+    void Promise.all([jobsRequest, loadFiltersPageData()])
+      .then(([loadedJobs, loadedConfig]) => {
+        setJobs(loadedJobs);
+        setFilterConfig(loadedConfig);
+      })
+      .catch((cause) => {
+        setError(cause instanceof Error ? cause.message : "岗位加载失败");
+      });
   }, [initialJobs]);
+
+  useEffect(() => {
+    const refreshAfterDetailVisit = () => {
+      void loadJobsPageData().then(setJobs).catch(() => undefined);
+    };
+    window.addEventListener("focus", refreshAfterDetailVisit);
+    return () => window.removeEventListener("focus", refreshAfterDetailVisit);
+  }, []);
 
   const visibleJobs = useMemo(() => filterJobs(jobs, query), [jobs, query]);
 
@@ -85,7 +101,7 @@ export default function JobsPage({ initialJobs }: { initialJobs?: JobCard[] }) {
 
   return (
     <>
-      <PageHeader description="查看插件采集的真实岗位数据。" title="岗位库" />
+      <PageHeader description="快速查看薪资和 JD；打开 BOSS 详情页后，插件会自动回填完整 JD。" title="岗位库" />
       <PageFeedback error={error} status={status} />
       <Panel title={`岗位列表（共 ${jobs.length} 个${query ? `，匹配 ${visibleJobs.length} 个` : ""}）`}>
         {!jobs.length ? (
@@ -140,14 +156,12 @@ export default function JobsPage({ initialJobs }: { initialJobs?: JobCard[] }) {
             </div>
             <div className="table-shell">
               <table className="data-table job-table">
-                <thead><tr><th>选择</th><th>岗位</th><th>城市</th><th>薪资</th><th>经验 / 学历</th><th>方向 / 行业</th><th>采集时间</th><th>操作</th></tr></thead>
+                <thead><tr><th>选择</th><th>岗位 / 薪资 / JD</th><th>经验 / 学历</th><th>方向 / 行业</th><th>采集时间</th><th>操作</th></tr></thead>
                 <tbody>
                   {visibleJobs.map((job) => (
                     <tr key={job.id}>
                       <td><input aria-label={`选择岗位-${job.title}-${job.company}`} checked={selectedJobIds.includes(job.id)} onChange={(event) => setSelectedJobIds((current) => event.target.checked ? Array.from(new Set([...current, job.id])) : current.filter((id) => id !== job.id))} type="checkbox" /></td>
-                      <td><strong>{job.title}</strong><span>{job.company}</span></td>
-                      <td>{job.city || "未记录"}</td>
-                      <td>{job.salary || "未记录"}</td>
+                      <td className="job-summary-cell"><JobQuickView job={job} negativeTerms={filterConfig?.excludedKeywords} positiveTerms={filterConfig ? [...filterConfig.targetTitles, ...filterConfig.requiredKeywords] : []} /></td>
                       <td>{[job.experience, job.education].filter(Boolean).join(" / ") || "未记录"}</td>
                       <td>{[job.direction, job.industry].filter(Boolean).join(" / ") || "未记录"}</td>
                       <td>{formatDateTime(job.collectedAt)}</td>
@@ -155,7 +169,6 @@ export default function JobsPage({ initialJobs }: { initialJobs?: JobCard[] }) {
                         <button className="table-link button-link" disabled={busy} onClick={() => void runAction([job.id], "favorite")} type="button">重点关注</button>
                         <button className="table-link button-link" disabled={busy} onClick={() => void runAction([job.id], "negative_remove")} type="button">不喜欢并移除</button>
                         <button className="table-link button-link" disabled={busy} onClick={() => void runAction([job.id], "remove")} type="button">普通移除</button>
-                        {job.detailUrl ? <a className="table-link" href={job.detailUrl} rel="noreferrer" target="_blank">打开岗位</a> : null}
                       </div></td>
                     </tr>
                   ))}

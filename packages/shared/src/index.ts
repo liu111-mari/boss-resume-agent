@@ -20,6 +20,7 @@ export const jobCardSchema = z.object({
   detailUrl: z.string().optional().default(""),
   sourcePage: z.string().optional().default("boss"),
   jdText: z.string().optional().default(""),
+  jdSource: z.enum(["list", "detail"]).optional(),
   experience: z.string().default(""),
   education: z.string().default(""),
   industry: z.string().default(""),

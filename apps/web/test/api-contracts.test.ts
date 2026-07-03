@@ -243,7 +243,7 @@ describe("persistent greeting automation API contracts", () => {
       acceptedCount: 3,
       jobs: expect.arrayContaining([
         expect.objectContaining({ id: "job-array-1", direction: "AI Agent" }),
-        expect.objectContaining({ id: "job-array-3", direction: "数据分析" })
+        expect.objectContaining({ id: "job-array-2", title: "数据分析师", direction: "数据分析" })
       ])
     });
 
@@ -253,7 +253,7 @@ describe("persistent greeting automation API contracts", () => {
     await expect(listResponse.json()).resolves.toMatchObject({
       jobs: expect.arrayContaining([
         expect.objectContaining({ id: "job-single", title: "数据分析师" }),
-        expect.objectContaining({ id: "job-array-3", detailUrl: "https://example.com/jobs/shared" })
+        expect.objectContaining({ id: "job-array-2", detailUrl: "https://example.com/jobs/shared" })
       ])
     });
 

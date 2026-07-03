@@ -277,7 +277,7 @@ export function createDomainStore(
         );
 
         if (existingIndex >= 0) {
-          jobs[existingIndex] = { ...jobs[existingIndex], ...job };
+          jobs[existingIndex] = mergeCollectedJob(jobs[existingIndex], job);
         } else {
           jobs.unshift(job);
         }
@@ -1113,6 +1113,22 @@ export function createDomainStore(
     saveSuggestionBatch,
     updateSuggestionBatch
   };
+}
+
+function mergeCollectedJob(existing: JobCard, incoming: JobCard): JobCard {
+  const keepExistingDetail = existing.jdSource === "detail" && incoming.jdSource !== "detail";
+  return jobCardSchema.parse({
+    ...existing,
+    ...incoming,
+    id: existing.id,
+    salary: incoming.salary || existing.salary,
+    jdText: keepExistingDetail ? existing.jdText : incoming.jdText || existing.jdText,
+    jdSource: keepExistingDetail ? existing.jdSource : incoming.jdSource,
+    experience: incoming.experience || existing.experience,
+    education: incoming.education || existing.education,
+    industry: incoming.industry || existing.industry,
+    rawText: incoming.rawText || existing.rawText
+  });
 }
 
 export function getDomainStore(

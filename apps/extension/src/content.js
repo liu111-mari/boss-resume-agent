@@ -29,6 +29,7 @@ scheduleAutomaticJobCollection();
 function scheduleAutomaticJobCollection() {
   const supportedPath =
     location.pathname.includes("/web/geek/jobs") ||
+    location.pathname.includes("/job_detail/") ||
     /^\/c\d+/.test(location.pathname) ||
     location.pathname.includes("/zhaopin");
   if (!supportedPath) return;
@@ -37,7 +38,9 @@ function scheduleAutomaticJobCollection() {
   let timer;
 
   const attemptCollection = async () => {
-    const signature = globalThis.BossPageAdapter.getVisibleJobSignature(document);
+    const signature = location.pathname.includes("/job_detail/")
+      ? location.href
+      : globalThis.BossPageAdapter.getVisibleJobSignature(document);
     if (!signature || signature === collectedSignature) return;
 
     const result = await collectVisibleJobs().catch(() => null);
@@ -60,7 +63,7 @@ async function collectVisibleJobs() {
   if (!risk.ok) return { ok: false, message: "检测到验证码/登录/安全提示，已暂停" };
   const jobs = globalThis.BossJobExtractor.extractVisibleJobs(document, location.href);
   if (!jobs.length) {
-    return { ok: false, message: "当前页面未识别到岗位，请确认已打开 BOSS 推荐或搜索结果页" };
+    return { ok: false, message: "当前页面未识别到岗位，请确认已打开 BOSS 岗位列表或详情页" };
   }
   await postJSON("/api/extension/ingest", { jobs });
   return { ok: true, message: `已采集 ${jobs.length} 个岗位` };

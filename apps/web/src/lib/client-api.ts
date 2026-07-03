@@ -195,14 +195,31 @@ export async function loadTemplatePageData(): Promise<{
 }
 
 export async function loadApprovalsPageData(): Promise<{
+  config: FilterConfig;
+  jobs: JobCard[];
   profile: Profile;
   tasks: GreetingTask[];
 }> {
-  const [profileResponse, tasksResponse] = await Promise.all([
+  const [configResponse, jobsResponse, profileResponse, tasksResponse] = await Promise.all([
+    fetchJson<{ config: FilterConfig }>("/api/config"),
+    fetchJson<{ jobs: JobCard[] }>("/api/jobs"),
     fetchJson<{ profile: Profile }>("/api/profile"),
     loadApprovalTasksPageData()
   ]);
-  return { profile: profileResponse.profile, tasks: tasksResponse };
+  return {
+    config: configResponse.config,
+    jobs: jobsResponse.jobs,
+    profile: profileResponse.profile,
+    tasks: tasksResponse
+  };
+}
+
+export async function loadApprovalOperationalData(): Promise<{
+  jobs: JobCard[];
+  tasks: GreetingTask[];
+}> {
+  const [jobs, tasks] = await Promise.all([loadJobsPageData(), loadApprovalTasksPageData()]);
+  return { jobs, tasks };
 }
 
 export async function loadApprovalTasksPageData(): Promise<GreetingTask[]> {

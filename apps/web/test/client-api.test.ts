@@ -118,7 +118,12 @@ describe("client api helpers", () => {
 
     fetchMock.mockClear();
     await loadApprovalsPageData();
-    expect(fetchMock.mock.calls.map(([url]) => String(url)).sort()).toEqual(["/api/profile", "/api/tasks"]);
+    expect(fetchMock.mock.calls.map(([url]) => String(url)).sort()).toEqual([
+      "/api/config",
+      "/api/jobs",
+      "/api/profile",
+      "/api/tasks"
+    ]);
 
     fetchMock.mockClear();
     await loadRunsPageData();

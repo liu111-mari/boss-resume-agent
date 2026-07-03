@@ -26,6 +26,8 @@ test("content script automatically collects jobs on supported BOSS job pages", (
   assert.match(content, /scheduleAutomaticJobCollection/);
   assert.match(content, /MutationObserver/);
   assert.match(content, /web\/geek\/jobs/);
+  assert.match(content, /job_detail/);
+  assert.match(content, /location\.href/);
 });
 
 test("content script delegates greeting interactions to BossPageAdapter", () => {
@@ -41,7 +43,7 @@ test("content script delegates greeting interactions to BossPageAdapter", () => 
   assert.doesNotMatch(content, /COLLECT_CONVERSATIONS/);
   assert.doesNotMatch(content, /function\s+(collectConversations|sendGreeting|hasRiskBlocker|findEditor|setEditorText|findClickable|delay)\b/);
   assert.doesNotMatch(content, /\.(querySelector|querySelectorAll|closest|matches)\s*\(/);
-  assert.doesNotMatch(content, /textarea|contenteditable|job_detail/);
+  assert.doesNotMatch(content, /textarea|contenteditable/);
 });
 
 test("popup no longer exposes conversation collection", () => {

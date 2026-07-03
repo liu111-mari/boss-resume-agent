@@ -18,9 +18,10 @@ const job: JobCard = {
   salary: "200-300元/天",
   hrName: "",
   hrActiveText: "",
-  detailUrl: "",
+  detailUrl: "https://www.zhipin.com/job_detail/job-1.html",
   sourcePage: "boss",
   jdText: "使用 SQL 完成经营分析",
+  jdSource: "detail",
   experience: "在校/应届",
   education: "本科",
   industry: "企业服务",
@@ -40,6 +41,10 @@ describe("job preference UI", () => {
     expect(html).toContain("反馈重点");
     expect(html).toContain("补充说明");
     expect(html).toContain("批量处理选中岗位");
+    expect(html).toContain("使用 SQL 完成经营分析");
+    expect(html).toContain("200-300元/天");
+    expect(html).toContain("BOSS详情");
+    expect(html).toContain('role="tooltip"');
   });
 
   it("renders feedback readiness, editable rules, candidate correction, preview, and apply controls", () => {

@@ -1,5 +1,10 @@
 (function initializeJobExtractor(globalScope) {
   function extractVisibleJobs(documentRef, sourcePage) {
+    if (isJobDetailPage(sourcePage)) {
+      const detailJob = extractCurrentJobDetail(documentRef, sourcePage);
+      return detailJob ? [detailJob] : [];
+    }
+
     const links = Array.from(documentRef.querySelectorAll("a[href*='/job_detail/']"));
     const seen = new Set();
     const jobs = [];
@@ -12,14 +17,14 @@
       seen.add(detailUrl);
 
       const card = findCardContainer(link);
-      const text = normalize(card?.textContent || link.textContent || "");
-      const title = normalize(link.textContent || "") || pickJobTitle(text) || "未知岗位";
+      const text = normalize(decodeBossText(visibleText(card) || visibleText(link)));
+      const title = normalize(visibleText(link)) || pickJobTitle(text) || "未知岗位";
       if (!title || title === "查看更多信息") continue;
 
       const companyLink = card?.querySelector("a[href*='/gongsi/']");
-      const company = normalize(companyLink?.textContent || "") || pickCompany(text) || "未知公司";
+      const company = normalize(visibleText(companyLink)) || pickCompany(text) || "未知公司";
       const city = pickCity(text);
-      const salary = (text.match(/\d{2,3}-\d{2,3}元\/天|\d{1,3}-\d{1,3}[Kk](?:·\d+薪)?|\d+元\/天/) || [""])[0];
+      const salary = pickSalary(text);
 
       jobs.push({
         id: stableId(`${detailUrl}-${title}-${company}`),
@@ -31,12 +36,49 @@
         hrActiveText: pickActive(text),
         detailUrl,
         sourcePage,
-        jdText: text.slice(0, 3000),
+        jdText: pickCardSummary(card, { title, company, city, salary }).slice(0, 3000),
+        jdSource: "list",
         collectedAt: new Date().toISOString()
       });
     }
 
     return jobs.slice(0, 50);
+  }
+
+  function extractCurrentJobDetail(documentRef, sourcePage) {
+    const title = normalize(visibleText(documentRef.querySelector(".job-primary .name h1, .name h1")));
+    const jdText = normalizeDescription(visibleText(documentRef.querySelector(".job-detail-section .job-sec-text:not(.fold-text), .job-sec-text:not(.fold-text)")));
+    if (!title || !jdText) return null;
+
+    const companyLink = Array.from(documentRef.querySelectorAll("a[href*='/gongsi/']")).find((link) => {
+      const href = link.getAttribute("href") || "";
+      return /\/gongsi\/[^/]+\.html(?:$|\?)/.test(href) && normalize(visibleText(link));
+    });
+    const company = normalize(visibleText(companyLink)) || "未知公司";
+    const city = normalize(visibleText(documentRef.querySelector(".job-primary .text-city"))) || pickCity(visibleText(documentRef.body));
+    const salaryText = decodeBossText(visibleText(documentRef.querySelector(".job-primary .salary, .company-info .salary")));
+    const salary = pickSalary(salaryText);
+    const experience = normalize(visibleText(documentRef.querySelector(".job-primary .text-experiece")));
+    const education = normalize(visibleText(documentRef.querySelector(".job-primary .text-degree")));
+    const detailUrl = new URL(sourcePage).href;
+    const pageText = normalize(visibleText(documentRef.body));
+
+    return {
+      id: stableId(`${detailUrl}-${title}-${company}`),
+      title,
+      company,
+      city,
+      salary,
+      hrName: pickHr(pageText),
+      hrActiveText: pickActive(pageText),
+      detailUrl,
+      sourcePage,
+      jdText: jdText.slice(0, 12000),
+      jdSource: "detail",
+      experience,
+      education,
+      collectedAt: new Date().toISOString()
+    };
   }
 
   function findCardContainer(link) {
@@ -88,8 +130,57 @@
     return match?.[0] || "";
   }
 
+  function pickCardSummary(card, metadata) {
+    if (!card) return "";
+    const explicit = card.querySelector(
+      ".job-card-body p, .job-card-info p, .job-detail, .job-desc, [class*='job-desc'], [class*='job-summary'], p"
+    );
+    const explicitText = normalize(decodeBossText(visibleText(explicit)));
+    if (explicitText && !isOnlyMetadata(explicitText, metadata)) return explicitText;
+    return "";
+  }
+
+  function isOnlyMetadata(text, metadata) {
+    let rest = text;
+    for (const value of Object.values(metadata)) {
+      if (value) rest = rest.replaceAll(value, " ");
+    }
+    return normalize(rest).length < 16;
+  }
+
+  function pickSalary(text) {
+    return (normalize(text).match(/\d{2,4}-\d{2,4}元\/天|\d{1,3}-\d{1,3}[Kk](?:·\d+薪)?|\d+元\/天/) || [""])[0];
+  }
+
+  function decodeBossText(text) {
+    return String(text || "").replace(/[\uE031-\uE03A]/g, (character) =>
+      String(character.charCodeAt(0) - 0xE031)
+    );
+  }
+
+  function visibleText(node) {
+    return node ? (node.innerText || node.textContent || "") : "";
+  }
+
+  function isJobDetailPage(sourcePage) {
+    try {
+      return new URL(sourcePage).pathname.includes("/job_detail/");
+    } catch {
+      return false;
+    }
+  }
+
   function normalize(text) {
     return text.replace(/\s+/g, " ").trim();
+  }
+
+  function normalizeDescription(text) {
+    return decodeBossText(text)
+      .replaceAll("来自BOSS直聘", "")
+      .split(/\n+/)
+      .map((line) => line.replace(/\s+/g, " ").trim())
+      .filter(Boolean)
+      .join("\n");
   }
 
   function stableId(input) {
@@ -101,7 +192,7 @@
     return `boss-${Math.abs(hash)}`;
   }
 
-  const api = { extractVisibleJobs };
+  const api = { decodeBossText, extractVisibleJobs };
   globalScope.BossJobExtractor = api;
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

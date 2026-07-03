@@ -5,7 +5,7 @@ import path from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-import type { FilterConfig, GreetingTask, Profile, ProfileItem } from "@boss-agent/shared";
+import type { FilterConfig, GreetingTask, JobCard, Profile, ProfileItem } from "@boss-agent/shared";
 
 import ApprovalQueue from "@/components/approval-queue";
 import ApprovalSendControl from "@/components/approval-send-control";
@@ -69,6 +69,29 @@ function createProfile(overrides: Partial<Profile> = {}): Profile {
     graduation: "2027-06",
     direction: "数据分析",
     items: createProfileItems(),
+    ...overrides
+  };
+}
+
+function createJob(overrides: Partial<JobCard> = {}): JobCard {
+  return {
+    id: "job-1",
+    title: "数据分析实习生",
+    company: "上海数策科技",
+    city: "上海",
+    salary: "250-350元/天",
+    hrName: "",
+    hrActiveText: "",
+    detailUrl: "https://www.zhipin.com/job_detail/job-1.html",
+    sourcePage: "boss",
+    jdText: "使用 SQL 和 Python 完成经营分析与数据看板建设。",
+    jdSource: "detail",
+    experience: "在校/应届",
+    education: "本科",
+    industry: "企业服务",
+    rawText: "",
+    direction: "数据分析",
+    collectedAt: "2026-07-03T00:00:00.000Z",
     ...overrides
   };
 }
@@ -140,6 +163,7 @@ describe("greeting workbench contract", () => {
   it("renders approval queue cards with textarea, score, reasons, cost, fallback and used profile content", () => {
     const html = renderToStaticMarkup(
       <ApprovalQueue
+        jobsById={new Map([["job-1", createJob()]])}
         profileItemsById={new Map(createProfile().items.map((item) => [item.id, item]))}
         rejectReason=""
         selectedTaskIds={[]}
@@ -167,6 +191,9 @@ describe("greeting workbench contract", () => {
     expect(html).toContain("0.011");
     expect(html).toContain("回退");
     expect(html).toContain("textarea");
+    expect(html).toContain("250-350元/天");
+    expect(html).toContain("使用 SQL 和 Python 完成经营分析");
+    expect(html).toContain("BOSS详情");
   });
 
   it("adds preference feedback and safe removal controls to the approval queue", () => {

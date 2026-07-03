@@ -2,11 +2,13 @@ import React from "react";
 import type {
   GreetingTask,
   GreetingTaskStatus,
+  JobCard,
   PreferenceFocusField,
   ProfileItem
 } from "@boss-agent/shared";
 
 import { Panel, StatusBadge } from "@/components/ui";
+import JobQuickView from "@/components/job-quick-view";
 import {
   approveTasks,
   rejectTasks,
@@ -19,6 +21,9 @@ import { isApprovableTask, reconcileSelectedTaskIds } from "@/lib/workbench-help
 
 type ApprovalQueueProps = {
   tasks: GreetingTask[];
+  jobsById?: Map<string, JobCard>;
+  positiveTerms?: string[];
+  negativeTerms?: string[];
   profileItemsById: Map<string, ProfileItem>;
   selectedTaskIds: string[];
   draftEdits?: Record<string, string>;
@@ -45,6 +50,9 @@ const visibleStatuses = new Set<GreetingTaskStatus>([
 
 export default function ApprovalQueue({
   tasks,
+  jobsById = new Map(),
+  positiveTerms = [],
+  negativeTerms = [],
   profileItemsById,
   selectedTaskIds,
   draftEdits = {},
@@ -261,6 +269,7 @@ export default function ApprovalQueue({
             .filter((item): item is ProfileItem => Boolean(item));
           const modelProvenance = buildModelProvenance(task);
           const draftValue = draftEdits[task.id] ?? task.messageDraft;
+          const job = jobsById.get(task.jobId) ?? createFallbackJob(task);
 
           return (
             <article className="queue-card" key={task.id}>
@@ -276,10 +285,7 @@ export default function ApprovalQueue({
                   选择
                 </label>
 
-                <div className="queue-card-title-group">
-                  <strong>{task.jobTitle}</strong>
-                  <span>{task.company}</span>
-                </div>
+                <div className="queue-card-title-group"><JobQuickView job={job} negativeTerms={negativeTerms} positiveTerms={positiveTerms} /></div>
 
                 <StatusBadge label={task.status} tone={statusToneMap[task.status]} />
               </div>
@@ -380,4 +386,26 @@ function buildModelProvenance(task: GreetingTask): string {
 
 function getErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : "未知错误";
+}
+
+function createFallbackJob(task: GreetingTask): JobCard {
+  return {
+    id: task.jobId,
+    title: task.jobTitle,
+    company: task.company,
+    city: "",
+    salary: "",
+    hrName: "",
+    hrActiveText: "",
+    detailUrl: task.detailUrl,
+    sourcePage: "boss",
+    jdText: "",
+    jdSource: "list",
+    experience: "",
+    education: "",
+    industry: "",
+    rawText: "",
+    direction: "其他",
+    collectedAt: task.createdAt
+  };
 }

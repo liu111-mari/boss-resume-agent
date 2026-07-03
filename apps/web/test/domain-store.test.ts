@@ -169,7 +169,7 @@ describe("domain store", () => {
         direction: "AI Agent"
       }),
       expect.objectContaining({
-        id: "job-detail-2",
+        id: "job-detail-1",
         title: "高级数据分析师",
         detailUrl: "https://example.com/jobs/1",
         direction: "数据分析"
@@ -494,6 +494,35 @@ describe("domain store", () => {
     await expect(rebuilt.getRunLogs()).resolves.toEqual([
       expect.objectContaining({ id: "log-1", message: "开始处理任务" }),
       expect.objectContaining({ id: "log-2", taskId: "task-1", level: "error" })
+    ]);
+  });
+
+  it("preserves full detail enrichment when a later list collection is less complete", async () => {
+    const store = await makeStore();
+    const detailUrl = "https://www.zhipin.com/job_detail/keep-detail.html";
+
+    await store.upsertJobs([createJob({
+      id: "detail-job",
+      detailUrl,
+      salary: "300-400元/天",
+      jdText: "完整职位描述：负责需求分析、原型验证和AI产品落地。",
+      jdSource: "detail"
+    })]);
+    await store.upsertJobs([createJob({
+      id: "list-job",
+      detailUrl,
+      salary: "",
+      jdText: "列表摘要",
+      jdSource: "list"
+    })]);
+
+    await expect(store.getJobs()).resolves.toEqual([
+      expect.objectContaining({
+        id: "detail-job",
+        salary: "300-400元/天",
+        jdText: "完整职位描述：负责需求分析、原型验证和AI产品落地。",
+        jdSource: "detail"
+      })
     ]);
   });
 
