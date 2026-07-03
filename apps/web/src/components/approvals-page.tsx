@@ -135,6 +135,11 @@ export default function ApprovalsPage() {
         onSelectAllApprovable={() =>
           setSelectedTaskIds(tasks.filter(isApprovableTask).map((task) => task.id))
         }
+        onSelectAllPreference={() =>
+          setSelectedTaskIds(tasks.filter((task) =>
+            ["pending_review", "approved", "paused", "quota_blocked"].includes(task.status)
+          ).map((task) => task.id))
+        }
         onStatus={setStatus}
         onTaskSaved={(savedTask) => {
           setTasks((current) => current.map((task) => task.id === savedTask.id ? savedTask : task));

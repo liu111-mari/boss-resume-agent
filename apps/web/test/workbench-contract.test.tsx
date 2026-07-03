@@ -169,6 +169,35 @@ describe("greeting workbench contract", () => {
     expect(html).toContain("textarea");
   });
 
+  it("adds preference feedback and safe removal controls to the approval queue", () => {
+    const html = renderToStaticMarkup(
+      <ApprovalQueue
+        profileItemsById={new Map()}
+        rejectReason=""
+        selectedTaskIds={[]}
+        tasks={[createTask(), createTask({ id: "task-approved", status: "approved" })]}
+        onDraftChange={vi.fn()}
+        onError={vi.fn()}
+        onOperationalRefresh={vi.fn()}
+        onRejectReasonChange={vi.fn()}
+        onSelectionChange={vi.fn()}
+        onSelectAllApprovable={vi.fn()}
+        onStatus={vi.fn()}
+        onTaskSaved={vi.fn()}
+      />
+    );
+
+    expect(html).toContain("反馈重点");
+    expect(html).toContain("补充说明");
+    expect(html).toContain("重点关注");
+    expect(html).toContain("不喜欢并移除");
+    expect(html).toContain("普通移除");
+    expect(approvalQueueSource).toContain("submitJobFeedback");
+    expect(approvalQueueSource).toContain("undoJobFeedback");
+    expect(approvalQueueSource).toContain("撤销上次偏好反馈");
+    expect(approvalQueueSource).toContain("task.jobId");
+  });
+
   it("uses local save callbacks and keeps manual refresh scoped to operational data", () => {
     expect(filtersPageSource).toContain("const refreshOperationalData = useCallback");
     expect(filtersPageSource).not.toContain("const refreshAllData = useCallback");

@@ -1,8 +1,20 @@
 import React from "react";
-import type { GreetingTask, GreetingTaskStatus, ProfileItem } from "@boss-agent/shared";
+import type {
+  GreetingTask,
+  GreetingTaskStatus,
+  PreferenceFocusField,
+  ProfileItem
+} from "@boss-agent/shared";
 
 import { Panel, StatusBadge } from "@/components/ui";
-import { approveTasks, rejectTasks, updateTaskDraft } from "@/lib/client-api";
+import {
+  approveTasks,
+  rejectTasks,
+  submitJobFeedback,
+  undoJobFeedback,
+  updateTaskDraft,
+  type JobFeedbackAction
+} from "@/lib/client-api";
 import { isApprovableTask, reconcileSelectedTaskIds } from "@/lib/workbench-helpers";
 
 type ApprovalQueueProps = {
@@ -17,6 +29,7 @@ type ApprovalQueueProps = {
   onRejectReasonChange: (value: string) => void;
   onSelectionChange: (taskId: string, checked: boolean) => void;
   onSelectAllApprovable: () => void;
+  onSelectAllPreference?: () => void;
   onSelectionReset?: () => void;
   onStatus?: (message: string) => void;
   onError?: (message: string) => void;
@@ -42,15 +55,27 @@ export default function ApprovalQueue({
   onRejectReasonChange,
   onSelectionChange,
   onSelectAllApprovable,
+  onSelectAllPreference,
   onSelectionReset,
   onStatus,
   onError
 }: ApprovalQueueProps) {
   const [isSubmitting, setIsSubmitting] = React.useState(false);
   const [savingTaskIds, setSavingTaskIds] = React.useState<string[]>([]);
+  const [focusFields, setFocusFields] = React.useState<PreferenceFocusField[]>([
+    "title",
+    "industry",
+    "jdResponsibilities"
+  ]);
+  const [preferenceNote, setPreferenceNote] = React.useState("");
+  const [lastFeedbackIds, setLastFeedbackIds] = React.useState<string[]>([]);
   const visibleTasks = tasks.filter((task) => visibleStatuses.has(task.status));
   const approvableTasks = visibleTasks.filter(isApprovableTask);
   const actionableSelectedTaskIds = reconcileSelectedTaskIds(tasks, selectedTaskIds);
+  const preferenceSelectableTasks = visibleTasks.filter((task) => task.status !== "sending");
+  const selectedPreferenceTasks = preferenceSelectableTasks.filter((task) =>
+    selectedTaskIds.includes(task.id)
+  );
 
   const handleSaveDraft = React.useCallback(
     async (taskId: string) => {
@@ -110,6 +135,58 @@ export default function ApprovalQueue({
     }
   }, [actionableSelectedTaskIds, onError, onOperationalRefresh, onSelectionReset, onStatus, rejectReason]);
 
+  const handlePreferenceAction = React.useCallback(async (
+    targetTasks: GreetingTask[],
+    action: JobFeedbackAction
+  ) => {
+    const jobIds = Array.from(new Set(targetTasks.map((task) => task.jobId)));
+    if (jobIds.length === 0 || isSubmitting) return;
+    if (
+      action !== "favorite" &&
+      typeof window !== "undefined" &&
+      !window.confirm(action === "negative_remove" ? "确认将岗位标记为不喜欢并移除？" : "确认移除岗位且不用于AI学习？")
+    ) return;
+
+    setIsSubmitting(true);
+    try {
+      const result = await submitJobFeedback({
+        jobIds,
+        action,
+        focusFields,
+        note: preferenceNote
+      });
+      setLastFeedbackIds(result.feedback.map((item) => item.id));
+      onSelectionReset?.();
+      onStatus?.(
+        action === "favorite"
+          ? `已记录 ${result.feedback.length} 条重点关注反馈。`
+          : `已移除 ${result.removedJobIds.length} 个岗位，取消 ${result.canceledTaskIds.length} 个未发送任务${result.blockedJobIds.length ? `，${result.blockedJobIds.length} 个发送中岗位未处理` : ""}。`
+      );
+      onError?.("");
+      await onOperationalRefresh();
+    } catch (error) {
+      onError?.(getErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [focusFields, isSubmitting, onError, onOperationalRefresh, onSelectionReset, onStatus, preferenceNote]);
+
+  const handleUndoPreference = React.useCallback(async () => {
+    if (lastFeedbackIds.length === 0 || isSubmitting) return;
+    setIsSubmitting(true);
+    try {
+      for (const feedbackId of lastFeedbackIds) await undoJobFeedback(feedbackId);
+      setLastFeedbackIds([]);
+      onStatus?.("已撤销上次偏好反馈并恢复被移除岗位；旧审批任务不会自动恢复。");
+      onError?.("");
+      await onOperationalRefresh();
+    } catch (error) {
+      onError?.(getErrorMessage(error));
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [isSubmitting, lastFeedbackIds, onError, onOperationalRefresh, onStatus]);
+
   return (
     <Panel
       id="approval-queue"
@@ -139,9 +216,46 @@ export default function ApprovalQueue({
         />
       </label>
 
+      <div className="preference-toolbar">
+        <strong>偏好处理选中任务（{selectedPreferenceTasks.length}）</strong>
+        <div className="preference-focus-fields" aria-label="反馈重点">
+          <span>反馈重点</span>
+          {focusFieldOptions.map((option) => (
+            <label className="checkbox-field" key={option.value}>
+              <input
+                checked={focusFields.includes(option.value)}
+                onChange={(event) => setFocusFields((current) =>
+                  event.target.checked
+                    ? Array.from(new Set([...current, option.value]))
+                    : current.filter((item) => item !== option.value)
+                )}
+                type="checkbox"
+              />
+              {option.label}
+            </label>
+          ))}
+        </div>
+        <label className="field preference-note">
+          <span>补充说明</span>
+          <input
+            className="input"
+            onChange={(event) => setPreferenceNote(event.target.value)}
+            placeholder="例如：岗位偏销售，缺少长期技能积累"
+            value={preferenceNote}
+          />
+        </label>
+        <div className="panel-actions-row">
+          <button className="button button-secondary" disabled={isSubmitting || preferenceSelectableTasks.length === 0 || !onSelectAllPreference} onClick={onSelectAllPreference} type="button">全选可处理</button>
+          <button className="button button-secondary" disabled={isSubmitting || selectedPreferenceTasks.length === 0} onClick={() => void handlePreferenceAction(selectedPreferenceTasks, "favorite")} type="button">重点关注</button>
+          <button className="button button-danger" disabled={isSubmitting || selectedPreferenceTasks.length === 0} onClick={() => void handlePreferenceAction(selectedPreferenceTasks, "negative_remove")} type="button">不喜欢并移除</button>
+          <button className="button button-danger-ghost" disabled={isSubmitting || selectedPreferenceTasks.length === 0} onClick={() => void handlePreferenceAction(selectedPreferenceTasks, "remove")} type="button">普通移除</button>
+          {lastFeedbackIds.length ? <button className="button button-ghost" disabled={isSubmitting} onClick={() => void handleUndoPreference()} type="button">撤销上次偏好反馈</button> : null}
+        </div>
+      </div>
+
       <div className="queue-list" aria-live="polite">
         {visibleTasks.map((task) => {
-          const canSelect = isApprovableTask(task);
+          const canSelect = task.status !== "sending";
           const usedProfileItems = task.usedProfileItemIds
             .map((itemId) => profileItemsById.get(itemId))
             .filter((item): item is ProfileItem => Boolean(item));
@@ -219,6 +333,9 @@ export default function ApprovalQueue({
                 >
                   保存话术
                 </button>
+                <button className="button button-secondary" disabled={isSubmitting} onClick={() => void handlePreferenceAction([task], "favorite")} type="button">重点关注</button>
+                <button className="button button-danger" disabled={isSubmitting || task.status === "sending"} onClick={() => void handlePreferenceAction([task], "negative_remove")} type="button">不喜欢并移除</button>
+                <button className="button button-danger-ghost" disabled={isSubmitting || task.status === "sending"} onClick={() => void handlePreferenceAction([task], "remove")} type="button">普通移除</button>
               </div>
             </article>
           );
@@ -229,6 +346,14 @@ export default function ApprovalQueue({
     </Panel>
   );
 }
+
+const focusFieldOptions: Array<{ value: PreferenceFocusField; label: string }> = [
+  { value: "title", label: "岗位名称" },
+  { value: "industry", label: "行业" },
+  { value: "jdResponsibilities", label: "JD工作内容" },
+  { value: "jdRequirements", label: "JD任职要求" },
+  { value: "other", label: "其他" }
+];
 
 const statusToneMap: Record<GreetingTaskStatus, "default" | "teal" | "amber" | "danger"> = {
   collected: "default",
