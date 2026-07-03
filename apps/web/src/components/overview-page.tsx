@@ -51,7 +51,7 @@ export default function OverviewPage({ initialData }: { initialData?: OverviewDa
       />
       <PageFeedback error={error} status={status} />
       <section className="overview-metrics">
-        <MetricCard label="采集岗位" value={data?.jobs.length ?? 0} />
+        <MetricCard label="岗位库（当前）" value={data?.jobs.length ?? 0} />
         <MetricCard label="待审批" tone="amber" value={countStatus(tasks, "pending_review")} />
         <MetricCard label="已批准" tone="teal" value={countStatus(tasks, "approved")} />
         <MetricCard label="今日发送" tone="teal" value={data?.runSummary?.usage.confirmedSends ?? 0} />

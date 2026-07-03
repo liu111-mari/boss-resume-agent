@@ -4,11 +4,24 @@ import type {
   GreetingTaskStatus,
   GreetingTemplate,
   JobCard,
+  PreferenceFeedback,
+  PreferenceFocusField,
+  PreferenceRule,
+  PreferenceRuleCandidate,
+  PreferenceSuggestionBatch,
   Profile
 } from "@boss-agent/shared";
 
 import type { DailyUsage, RunLogEntry } from "@/lib/domain-store";
 import type { GreetingPipelineRunCounts } from "@/lib/greeting-pipeline";
+
+export type CreateTasksFromJobsCounts = {
+  processed: number;
+  hardRejected: number;
+  pendingReview: number;
+  skipped: number;
+  failed: number;
+};
 
 export type WorkbenchRunSummary = {
   date: string;
@@ -31,6 +44,23 @@ export type WorkbenchOperationalData = {
   jobs: JobCard[];
   tasks: GreetingTask[];
   runSummary: WorkbenchRunSummary;
+};
+
+export type PreferenceStateData = {
+  feedback: PreferenceFeedback[];
+  rules: PreferenceRule[];
+  ruleHistory: PreferenceRule[];
+  suggestions: PreferenceSuggestionBatch[];
+  newFeedbackCount: number;
+};
+
+export type JobFeedbackAction = "favorite" | "negative_remove" | "remove";
+
+export type JobFeedbackResult = {
+  feedback: PreferenceFeedback[];
+  removedJobIds: string[];
+  blockedJobIds: string[];
+  canceledTaskIds: string[];
 };
 
 type ApiErrorPayload = {
@@ -63,6 +93,90 @@ export async function loadJobsPageData(): Promise<JobCard[]> {
 
 export async function loadFiltersPageData(): Promise<FilterConfig> {
   return (await fetchJson<{ config: FilterConfig }>("/api/config")).config;
+}
+
+export async function loadPreferenceState(): Promise<PreferenceStateData> {
+  return fetchJson<PreferenceStateData>("/api/preferences");
+}
+
+export async function submitJobFeedback(input: {
+  jobIds: string[];
+  action: JobFeedbackAction;
+  focusFields: PreferenceFocusField[];
+  note: string;
+}) {
+  return fetchJson<JobFeedbackResult>("/api/preferences/feedback", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(input)
+  });
+}
+
+export async function undoJobFeedback(feedbackId: string) {
+  return fetchJson<{ feedback: PreferenceFeedback; restoredJob: JobCard | null }>(
+    "/api/preferences/feedback/undo",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ feedbackId })
+    }
+  );
+}
+
+export async function generatePreferenceSuggestions(
+  correction: string,
+  previousBatchId?: string
+) {
+  return fetchJson<{ batch: PreferenceSuggestionBatch }>(
+    "/api/preferences/suggestions/generate",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ correction, previousBatchId: previousBatchId ?? null })
+    }
+  );
+}
+
+export async function applyPreferenceSuggestions(
+  batchId: string,
+  candidates: PreferenceRuleCandidate[]
+) {
+  return fetchJson<{ rules: PreferenceRule[]; acceptedRuleIds: string[] }>(
+    "/api/preferences/suggestions/apply",
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ batchId, candidates })
+    }
+  );
+}
+
+export async function savePreferenceRules(rules: PreferenceRule[]) {
+  return fetchJson<{ rules: PreferenceRule[] }>("/api/preferences/rules", {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ rules })
+  });
+}
+
+export async function restorePreferenceRuleVersion(ruleId: string, version: number) {
+  return fetchJson<{ rule: PreferenceRule }>("/api/preferences/rules/restore", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ ruleId, version })
+  });
+}
+
+export async function previewPreferenceCandidate(candidate: PreferenceRuleCandidate) {
+  return fetchJson<{
+    willBeExcluded: JobCard[];
+    willBeKept: JobCard[];
+    unchanged: JobCard[];
+  }>("/api/preferences/preview", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ candidate })
+  });
 }
 
 export async function loadProfilePageData(): Promise<Profile> {
@@ -119,6 +233,16 @@ export async function runPipeline(jobIds?: string[]) {
   });
 }
 
+export async function createTasksFromJobs(jobIds?: string[]) {
+  return fetchJson<{ counts: CreateTasksFromJobsCounts }>("/api/tasks/create-from-jobs", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json"
+    },
+    body: JSON.stringify(jobIds?.length ? { jobIds } : {})
+  });
+}
+
 export async function saveProfile(profile: Profile) {
   return fetchJson<{ profile: Profile }>("/api/profile", {
     method: "PUT",
@@ -167,6 +291,12 @@ export async function rejectTasks(taskIds: string[], reason?: string) {
     },
     body: JSON.stringify(reason ? { taskIds, reason } : { taskIds })
   });
+}
+
+export async function loadSentJobs() {
+  return fetchJson<{ jobs: Array<{ job: JobCard; taskId: string; sentAt: string }> }>(
+    "/api/sent-jobs"
+  );
 }
 
 export async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit): Promise<T> {

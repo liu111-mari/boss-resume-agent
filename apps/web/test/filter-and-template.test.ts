@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   evaluateJob,
+  preferenceRuleSchema,
   renderGreeting,
   selectProfileItems,
   type FilterConfig,
@@ -134,6 +135,35 @@ function createTemplate(overrides: Partial<GreetingTemplate> = {}): GreetingTemp
 }
 
 describe("evaluateJob", () => {
+  it("applies confirmed preference hard rules after base constraints", () => {
+    const rule = preferenceRuleSchema.parse({
+      id: "rule-sales",
+      action: "exclude",
+      field: "jd",
+      mode: "hard",
+      values: ["电话销售"],
+      statement: "",
+      weight: 100,
+      provenance: "manual",
+      evidenceFeedbackIds: [],
+      rationale: "排除纯销售",
+      confidence: 1,
+      active: true,
+      locked: false,
+      version: 1,
+      createdAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:00.000Z"
+    });
+
+    const result = evaluateJob(
+      createJob({ jdText: "主要工作是电话销售和客户邀约" }),
+      createFilterConfig(),
+      [rule]
+    );
+
+    expect(result).toEqual({ accepted: false, reasons: ["命中JD排除规则：电话销售"] });
+  });
+
   it("returns exactly the excluded keyword rejection reason", () => {
     const result = evaluateJob(
       createJob({

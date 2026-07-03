@@ -192,6 +192,27 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { cursor: no
 .textarea { min-height: 96px; resize: vertical; }
 .textarea-lg { min-height: 136px; }
 .job-search { max-width: 520px; margin-bottom: 16px; }
+.preference-toolbar, .preference-section {
+  display: grid;
+  gap: 14px;
+  margin-bottom: 18px;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-muted);
+}
+.preference-focus-fields, .job-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.preference-note { max-width: 720px; }
+.preference-rule-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.preference-card { display: grid; gap: 12px; min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.preference-actions { margin: 12px 0; }
+.preference-metrics { margin-bottom: 18px; }
+.button-link { min-height: auto; padding: 0; border: 0; background: transparent; cursor: pointer; font: inherit; }
 
 .provider-note, .section-subheader, .status-inline {
   display: flex;
@@ -320,6 +341,7 @@ button:disabled, input:disabled, textarea:disabled, select:disabled { cursor: no
   .page-header, .panel-header, .provider-note, .section-subheader, .status-inline { align-items: stretch; flex-direction: column; }
   .page-header-actions, .panel-actions, .panel-actions-row, .queue-toolbar, .queue-card-footer { justify-content: stretch; }
   .page-header-actions > *, .panel-actions-row > *, .queue-toolbar > * { width: 100%; }
+  .preference-rule-grid { grid-template-columns: minmax(0, 1fr); }
 }
 
 @media (prefers-reduced-motion: reduce) {

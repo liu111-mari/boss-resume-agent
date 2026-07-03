@@ -496,4 +496,135 @@ describe("domain store", () => {
       expect.objectContaining({ id: "log-2", taskId: "task-1", level: "error" })
     ]);
   });
+
+  it("starts with editable preference preset rules", async () => {
+    const store = await makeStore();
+
+    const state = await store.getPreferenceState();
+
+    expect(state.rules.some((rule) => rule.values.includes("数据分析"))).toBe(true);
+    expect(state.rules.every((rule) => rule.locked === false)).toBe(true);
+    expect(state.feedback).toEqual([]);
+    expect(state.newFeedbackCount).toBe(0);
+  });
+
+  it("records positive feedback without removing the job", async () => {
+    const store = await makeStore();
+    await store.upsertJobs([createJob()]);
+
+    const result = await store.recordJobFeedback({
+      jobIds: ["job-1"],
+      label: "positive",
+      remove: false,
+      focusFields: ["title", "industry"],
+      note: "喜欢数据分析方向"
+    });
+
+    expect(result.feedback).toHaveLength(1);
+    expect(result.feedback[0]).toMatchObject({ label: "positive", note: "喜欢数据分析方向" });
+    await expect(store.getJobs()).resolves.toHaveLength(1);
+  });
+
+  it("stores a negative snapshot before removing a job and cancels its approved task", async () => {
+    const store = await makeStore();
+    await store.upsertJobs([createJob({ title: "养生师", industry: "生活服务" })]);
+    await store.createOrUpdateTask(createTask({ status: "approved" }));
+
+    const result = await store.recordJobFeedback({
+      jobIds: ["job-1"],
+      label: "negative",
+      remove: true,
+      focusFields: ["title", "industry", "jdResponsibilities"],
+      note: "没有职业复利"
+    });
+
+    expect(result.removedJobIds).toEqual(["job-1"]);
+    expect(result.canceledTaskIds).toEqual(["task-1"]);
+    expect(result.feedback[0].jobSnapshot.title).toBe("养生师");
+    await expect(store.getJobs()).resolves.toEqual([]);
+    await expect(store.getTasks()).resolves.toEqual([
+      expect.objectContaining({ id: "task-1", status: "rejected", failureReason: "user_removed_job" })
+    ]);
+  });
+
+  it("blocks removal while a job task is sending", async () => {
+    const store = await makeStore();
+    await store.upsertJobs([createJob()]);
+    await store.createOrUpdateTask(createTask({ status: "sending" }));
+
+    const result = await store.removeJobs(["job-1"]);
+
+    expect(result.blockedJobIds).toEqual(["job-1"]);
+    expect(result.removedJobIds).toEqual([]);
+    await expect(store.getJobs()).resolves.toHaveLength(1);
+  });
+
+  it("undoes negative feedback and restores the job without reapproving tasks", async () => {
+    const store = await makeStore();
+    await store.upsertJobs([createJob()]);
+    await store.createOrUpdateTask(createTask({ status: "approved" }));
+    const removed = await store.recordJobFeedback({
+      jobIds: ["job-1"],
+      label: "negative",
+      remove: true,
+      focusFields: ["title"],
+      note: ""
+    });
+
+    const undone = await store.undoPreferenceFeedback(removed.feedback[0].id);
+
+    expect(undone.feedback.active).toBe(false);
+    expect(undone.restoredJob?.id).toBe("job-1");
+    await expect(store.getTasks()).resolves.toEqual([
+      expect.objectContaining({ status: "rejected" })
+    ]);
+  });
+
+  it("persists edited rules and suggestion batches", async () => {
+    const store = await makeStore();
+    const initial = await store.getPreferenceState();
+    const edited = initial.rules.map((rule) =>
+      rule.id === "preset-target-titles"
+        ? { ...rule, values: [...rule.values, "数据治理"], version: rule.version + 1 }
+        : rule
+    );
+
+    await store.savePreferenceRules(edited);
+    await store.saveSuggestionBatch({
+      id: "batch-1",
+      feedbackIds: [],
+      currentRuleIds: edited.map((rule) => rule.id),
+      correction: "排除纯销售运营",
+      candidates: [],
+      status: "draft",
+      provider: "deepseek",
+      model: "deepseek-chat",
+      estimatedCostCny: 0.01,
+      createdAt: "2026-07-03T00:00:00.000Z",
+      updatedAt: "2026-07-03T00:00:00.000Z"
+    });
+
+    const rebuilt = createDomainStore(tempDir);
+    const state = await rebuilt.getPreferenceState();
+    expect(state.rules.find((rule) => rule.id === "preset-target-titles")?.values).toContain("数据治理");
+    expect(state.suggestions).toEqual([expect.objectContaining({ id: "batch-1", status: "draft" })]);
+  });
+
+  it("archives changed rule versions and can restore an earlier version", async () => {
+    const store = await makeStore();
+    const initial = await store.getPreferenceState();
+    const target = initial.rules.find((rule) => rule.id === "preset-target-titles")!;
+    await store.savePreferenceRules(initial.rules.map((rule) =>
+      rule.id === target.id
+        ? { ...rule, values: [...rule.values, "数据治理"], version: 2, updatedAt: "2026-07-03T01:00:00.000Z" }
+        : rule
+    ));
+
+    const changed = await store.getPreferenceState();
+    expect(changed.ruleHistory).toEqual([expect.objectContaining({ id: target.id, version: 1 })]);
+
+    const restored = await store.restorePreferenceRuleVersion(target.id, 1);
+    expect(restored.values).toEqual(target.values);
+    expect(restored.version).toBe(3);
+  });
 });

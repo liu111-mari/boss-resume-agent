@@ -28,6 +28,78 @@ export const jobCardSchema = z.object({
   collectedAt: z.string()
 });
 
+export const preferenceFocusFieldSchema = z.enum([
+  "title",
+  "industry",
+  "jdResponsibilities",
+  "jdRequirements",
+  "other"
+]);
+
+export const preferenceFeedbackSchema = z.object({
+  id: z.string(),
+  jobId: z.string(),
+  jobSnapshot: jobCardSchema,
+  label: z.enum(["positive", "negative"]),
+  focusFields: z.array(preferenceFocusFieldSchema).default([]),
+  note: z.string().default(""),
+  active: z.boolean().default(true),
+  source: z.enum(["favorite", "negative_remove"]).default("favorite"),
+  consumedBySuggestionIds: z.array(z.string()).default([]),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+
+export const preferenceRuleActionSchema = z.enum(["include", "exclude", "prefer"]);
+export const preferenceRuleFieldSchema = z.enum([
+  "title",
+  "industry",
+  "jd",
+  "semantic_preference"
+]);
+export const preferenceRuleModeSchema = z.enum(["hard", "soft"]);
+
+const preferenceRuleCoreSchema = z.object({
+  action: preferenceRuleActionSchema,
+  field: preferenceRuleFieldSchema,
+  mode: preferenceRuleModeSchema,
+  values: z.array(z.string()).default([]),
+  statement: z.string().default(""),
+  weight: z.number().min(0).max(100).default(50),
+  evidenceFeedbackIds: z.array(z.string()).default([]),
+  rationale: z.string().default(""),
+  confidence: z.number().min(0).max(1).default(0.5)
+});
+
+export const preferenceRuleCandidateSchema = preferenceRuleCoreSchema.extend({
+  tempId: z.string()
+});
+
+export const preferenceRuleSchema = preferenceRuleCoreSchema.extend({
+  id: z.string(),
+  provenance: z.enum(["manual", "ai_accepted", "preset"]),
+  active: z.boolean().default(true),
+  locked: z.boolean().default(false),
+  version: z.number().int().positive().default(1),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+
+export const preferenceSuggestionBatchSchema = z.object({
+  id: z.string(),
+  feedbackIds: z.array(z.string()),
+  currentRuleIds: z.array(z.string()).default([]),
+  previousBatchId: z.string().optional(),
+  correction: z.string().default(""),
+  candidates: z.array(preferenceRuleCandidateSchema),
+  status: z.enum(["draft", "accepted", "rejected", "superseded"]).default("draft"),
+  provider: z.string(),
+  model: z.string(),
+  estimatedCostCny: z.number().nonnegative().default(0),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+
 export const filterConfigSchema = z
   .object({
     targetTitles: z.array(z.string()).default([]),
@@ -144,6 +216,11 @@ export const greetingTaskSchema = z.object({
 
 export type JobDirection = z.infer<typeof jobDirectionSchema>;
 export type JobCard = z.infer<typeof jobCardSchema>;
+export type PreferenceFocusField = z.infer<typeof preferenceFocusFieldSchema>;
+export type PreferenceFeedback = z.infer<typeof preferenceFeedbackSchema>;
+export type PreferenceRuleCandidate = z.infer<typeof preferenceRuleCandidateSchema>;
+export type PreferenceRule = z.infer<typeof preferenceRuleSchema>;
+export type PreferenceSuggestionBatch = z.infer<typeof preferenceSuggestionBatchSchema>;
 export type FilterConfig = z.infer<typeof filterConfigSchema>;
 export type ProfileItem = z.infer<typeof profileItemSchema>;
 export type Profile = z.infer<typeof profileSchema>;
@@ -162,4 +239,5 @@ export function inferDirection(text: string): JobDirection {
 }
 
 export * from "./filter";
+export * from "./preferences";
 export * from "./template";

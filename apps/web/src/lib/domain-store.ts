@@ -6,12 +6,20 @@ import {
   greetingTemplateSchema,
   inferDirection,
   jobCardSchema,
+  preferenceFeedbackSchema,
+  preferenceRuleSchema,
+  preferenceSuggestionBatchSchema,
   profileSchema,
+  createDefaultPreferenceRules,
   type FilterConfig,
   type GreetingTask,
   type GreetingTaskStatus,
   type GreetingTemplate,
   type JobCard,
+  type PreferenceFeedback,
+  type PreferenceFocusField,
+  type PreferenceRule,
+  type PreferenceSuggestionBatch,
   type Profile
 } from "@boss-agent/shared";
 import { z } from "zod";
@@ -85,6 +93,28 @@ const defaultNonTerminalTaskStatuses = [
 export type RunLogEntry = z.infer<typeof runLogEntrySchema>;
 export type DailyUsage = z.infer<typeof dailyUsageSchema>;
 
+export type JobRemovalResult = {
+  removedJobIds: string[];
+  blockedJobIds: string[];
+  canceledTaskIds: string[];
+};
+
+export type RecordJobFeedbackInput = {
+  jobIds: string[];
+  label: "positive" | "negative";
+  remove: boolean;
+  focusFields: PreferenceFocusField[];
+  note: string;
+};
+
+export type PreferenceState = {
+  feedback: PreferenceFeedback[];
+  rules: PreferenceRule[];
+  ruleHistory: PreferenceRule[];
+  suggestions: PreferenceSuggestionBatch[];
+  newFeedbackCount: number;
+};
+
 export class DomainTransitionError extends Error {
   constructor(
     public readonly from: GreetingTaskStatus,
@@ -156,7 +186,32 @@ export function createDomainStore(
     jobs: new JsonRepository(path.join(resolvedBaseDir, "jobs.json"), z.array(jobCardSchema), []),
     tasks: new JsonRepository(path.join(resolvedBaseDir, "tasks.json"), z.array(greetingTaskSchema), []),
     runLogs: new JsonRepository(path.join(resolvedBaseDir, "run-logs.json"), runLogListSchema, []),
-    dailyUsage: new JsonRepository(path.join(resolvedBaseDir, "daily-usage.json"), dailyUsageListSchema, [])
+    dailyUsage: new JsonRepository(path.join(resolvedBaseDir, "daily-usage.json"), dailyUsageListSchema, []),
+    sentJobs: new JsonRepository(
+      path.join(resolvedBaseDir, "sent-jobs.json"),
+      z.array(z.object({ job: jobCardSchema, taskId: z.string(), sentAt: z.string() })),
+      []
+    ),
+    preferenceFeedback: new JsonRepository(
+      path.join(resolvedBaseDir, "preference-feedback.json"),
+      z.array(preferenceFeedbackSchema),
+      []
+    ),
+    preferenceRules: new JsonRepository(
+      path.join(resolvedBaseDir, "preference-rules.json"),
+      z.array(preferenceRuleSchema),
+      createDefaultPreferenceRules()
+    ),
+    preferenceRuleHistory: new JsonRepository(
+      path.join(resolvedBaseDir, "preference-rule-history.json"),
+      z.array(preferenceRuleSchema),
+      []
+    ),
+    preferenceSuggestions: new JsonRepository(
+      path.join(resolvedBaseDir, "preference-suggestions.json"),
+      z.array(preferenceSuggestionBatchSchema),
+      []
+    )
   };
 
   function queueMutation<T>(_key: string, mutate: () => Promise<T>): Promise<T> {
@@ -230,6 +285,296 @@ export function createDomainStore(
 
       return repositories.jobs.write(jobs);
     });
+  }
+
+  async function deleteJob(jobId: string): Promise<void> {
+    return queueMutation("jobs", async () => {
+      const jobs = await repositories.jobs.read();
+      const filtered = jobs.filter((j) => j.id !== jobId);
+      if (filtered.length === jobs.length) return; // 没有变化
+      await repositories.jobs.write(filtered);
+    });
+  }
+
+  async function getPreferenceState(): Promise<PreferenceState> {
+    const [feedback, rules, ruleHistory, suggestions] = await Promise.all([
+      repositories.preferenceFeedback.read(),
+      repositories.preferenceRules.read(),
+      repositories.preferenceRuleHistory.read(),
+      repositories.preferenceSuggestions.read()
+    ]);
+    return {
+      feedback,
+      rules,
+      ruleHistory,
+      suggestions,
+      newFeedbackCount: feedback.filter(
+        (item) => item.active && item.consumedBySuggestionIds.length === 0
+      ).length
+    };
+  }
+
+  async function recordJobFeedback(input: RecordJobFeedbackInput): Promise<
+    JobRemovalResult & { feedback: PreferenceFeedback[] }
+  > {
+    return queueMutation("preferences", async () => {
+      const parsedInput = z.object({
+        jobIds: z.array(z.string()).min(1),
+        label: z.enum(["positive", "negative"]),
+        remove: z.boolean(),
+        focusFields: z.array(z.enum(["title", "industry", "jdResponsibilities", "jdRequirements", "other"])),
+        note: z.string()
+      }).parse(input);
+      const jobs = await repositories.jobs.read();
+      const tasks = await repositories.tasks.read();
+      const existingFeedback = await repositories.preferenceFeedback.read();
+      const jobIds = Array.from(new Set(parsedInput.jobIds));
+      const removal = parsedInput.remove
+        ? buildRemovalMutation(jobs, tasks, jobIds)
+        : { nextJobs: jobs, nextTasks: tasks, removedJobIds: [], blockedJobIds: [], canceledTaskIds: [] };
+      const acceptedJobIds = new Set(
+        parsedInput.remove
+          ? removal.removedJobIds
+          : jobIds.filter((jobId) => jobs.some((job) => job.id === jobId))
+      );
+      const now = new Date().toISOString();
+      const nextFeedback = existingFeedback.map((item) =>
+        acceptedJobIds.has(item.jobId) && item.active
+          ? preferenceFeedbackSchema.parse({ ...item, active: false, updatedAt: now })
+          : item
+      );
+      const created = jobs
+        .filter((job) => acceptedJobIds.has(job.id))
+        .map((job) => preferenceFeedbackSchema.parse({
+          id: globalThis.crypto.randomUUID(),
+          jobId: job.id,
+          jobSnapshot: job,
+          label: parsedInput.label,
+          focusFields: parsedInput.focusFields,
+          note: parsedInput.note.trim(),
+          active: true,
+          source: parsedInput.label === "positive" ? "favorite" : "negative_remove",
+          consumedBySuggestionIds: [],
+          createdAt: now,
+          updatedAt: now
+        }));
+
+      await repositories.preferenceFeedback.write([...nextFeedback, ...created]);
+      if (parsedInput.remove) {
+        await repositories.tasks.write(removal.nextTasks);
+        await repositories.jobs.write(removal.nextJobs);
+      }
+      return {
+        feedback: created,
+        removedJobIds: removal.removedJobIds,
+        blockedJobIds: removal.blockedJobIds,
+        canceledTaskIds: removal.canceledTaskIds
+      };
+    });
+  }
+
+  async function removeJobs(jobIds: string[]): Promise<JobRemovalResult> {
+    return queueMutation("jobs", async () => {
+      const jobs = await repositories.jobs.read();
+      const tasks = await repositories.tasks.read();
+      const mutation = buildRemovalMutation(jobs, tasks, Array.from(new Set(jobIds)));
+      await repositories.tasks.write(mutation.nextTasks);
+      await repositories.jobs.write(mutation.nextJobs);
+      return {
+        removedJobIds: mutation.removedJobIds,
+        blockedJobIds: mutation.blockedJobIds,
+        canceledTaskIds: mutation.canceledTaskIds
+      };
+    });
+  }
+
+  async function undoPreferenceFeedback(feedbackId: string): Promise<{
+    feedback: PreferenceFeedback;
+    restoredJob: JobCard | null;
+  }> {
+    return queueMutation("preferences", async () => {
+      const feedback = await repositories.preferenceFeedback.read();
+      const index = feedback.findIndex((item) => item.id === feedbackId && item.active);
+      if (index < 0) throw new Error("preference_feedback_not_found");
+      const now = new Date().toISOString();
+      const next = preferenceFeedbackSchema.parse({
+        ...feedback[index],
+        active: false,
+        updatedAt: now
+      });
+      feedback[index] = next;
+      await repositories.preferenceFeedback.write(feedback);
+
+      let restoredJob: JobCard | null = null;
+      if (next.source === "negative_remove") {
+        const jobs = await repositories.jobs.read();
+        if (!jobs.some((job) => job.id === next.jobId)) {
+          restoredJob = next.jobSnapshot;
+          await repositories.jobs.write([restoredJob, ...jobs]);
+        }
+      }
+      return { feedback: next, restoredJob };
+    });
+  }
+
+  async function savePreferenceRules(input: unknown): Promise<PreferenceRule[]> {
+    return queueMutation("preferences", async () => {
+      const nextRules = z.array(preferenceRuleSchema).parse(input);
+      const [currentRules, history] = await Promise.all([
+        repositories.preferenceRules.read(),
+        repositories.preferenceRuleHistory.read()
+      ]);
+      const nextById = new Map(nextRules.map((rule) => [rule.id, rule]));
+      const nextHistory = [...history];
+      for (const current of currentRules) {
+        const next = nextById.get(current.id);
+        if ((!next || JSON.stringify(next) !== JSON.stringify(current)) &&
+          !nextHistory.some((item) => item.id === current.id && item.version === current.version)) {
+          nextHistory.push(current);
+        }
+      }
+      await repositories.preferenceRuleHistory.write(nextHistory);
+      return repositories.preferenceRules.write(nextRules);
+    });
+  }
+
+  async function restorePreferenceRuleVersion(ruleId: string, version: number): Promise<PreferenceRule> {
+    return queueMutation("preferences", async () => {
+      const [rules, history] = await Promise.all([
+        repositories.preferenceRules.read(),
+        repositories.preferenceRuleHistory.read()
+      ]);
+      const target = history.find((item) => item.id === ruleId && item.version === version)
+        ?? rules.find((item) => item.id === ruleId && item.version === version);
+      if (!target) throw new Error("preference_rule_version_not_found");
+
+      const current = rules.find((item) => item.id === ruleId);
+      const nextHistory = [...history];
+      if (current && !nextHistory.some((item) => item.id === current.id && item.version === current.version)) {
+        nextHistory.push(current);
+      }
+      const versions = history.filter((item) => item.id === ruleId).map((item) => item.version);
+      const restored = preferenceRuleSchema.parse({
+        ...target,
+        provenance: "manual",
+        version: Math.max(target.version, current?.version ?? 0, ...versions) + 1,
+        updatedAt: new Date().toISOString()
+      });
+      const nextRules = rules.filter((item) => item.id !== ruleId);
+      nextRules.push(restored);
+      await repositories.preferenceRuleHistory.write(nextHistory);
+      await repositories.preferenceRules.write(nextRules);
+      return restored;
+    });
+  }
+
+  async function saveSuggestionBatch(input: unknown): Promise<PreferenceSuggestionBatch> {
+    return queueMutation("preferences", async () => {
+      const batch = preferenceSuggestionBatchSchema.parse(input);
+      const suggestions = await repositories.preferenceSuggestions.read();
+      const nextSuggestions = suggestions.filter((item) => item.id !== batch.id);
+      nextSuggestions.push(batch);
+      await repositories.preferenceSuggestions.write(nextSuggestions);
+
+      const consumedIds = new Set(batch.feedbackIds);
+      if (consumedIds.size > 0) {
+        const feedback = await repositories.preferenceFeedback.read();
+        await repositories.preferenceFeedback.write(feedback.map((item) =>
+          consumedIds.has(item.id) && !item.consumedBySuggestionIds.includes(batch.id)
+            ? preferenceFeedbackSchema.parse({
+                ...item,
+                consumedBySuggestionIds: [...item.consumedBySuggestionIds, batch.id],
+                updatedAt: batch.updatedAt
+              })
+            : item
+        ));
+      }
+      return batch;
+    });
+  }
+
+  async function updateSuggestionBatch(
+    batchId: string,
+    patch: Partial<Pick<PreferenceSuggestionBatch, "status" | "updatedAt">>
+  ): Promise<PreferenceSuggestionBatch> {
+    return queueMutation("preferences", async () => {
+      const suggestions = await repositories.preferenceSuggestions.read();
+      const index = suggestions.findIndex((item) => item.id === batchId);
+      if (index < 0) throw new Error("preference_suggestion_not_found");
+      const next = preferenceSuggestionBatchSchema.parse({ ...suggestions[index], ...patch });
+      suggestions[index] = next;
+      await repositories.preferenceSuggestions.write(suggestions);
+      return next;
+    });
+  }
+
+  function buildRemovalMutation(jobs: JobCard[], tasks: GreetingTask[], jobIds: string[]) {
+    const requested = new Set(jobIds);
+    const blockedJobIds = jobIds.filter((jobId) =>
+      tasks.some((task) => task.jobId === jobId && task.status === "sending")
+    );
+    const blocked = new Set(blockedJobIds);
+    const removable = new Set(jobIds.filter((jobId) =>
+      !blocked.has(jobId) && jobs.some((job) => job.id === jobId)
+    ));
+    const canceledTaskIds: string[] = [];
+    const now = new Date().toISOString();
+    const nextTasks = tasks.map((task) => {
+      if (!removable.has(task.jobId)) return task;
+      const allowed = taskTransitionMap[task.status];
+      const nextStatus = allowed.includes("rejected")
+        ? "rejected"
+        : allowed.includes("failed")
+          ? "failed"
+          : null;
+      if (!nextStatus) return task;
+      canceledTaskIds.push(task.id);
+      return greetingTaskSchema.parse({
+        ...task,
+        status: nextStatus,
+        failureReason: "user_removed_job",
+        updatedAt: now
+      });
+    });
+    return {
+      nextJobs: jobs.filter((job) => !removable.has(job.id)),
+      nextTasks,
+      removedJobIds: jobs.filter((job) => requested.has(job.id) && removable.has(job.id)).map((job) => job.id),
+      blockedJobIds,
+      canceledTaskIds
+    };
+  }
+
+  async function writeSentJob(job: JobCard, taskId: string, sentAt: string): Promise<void> {
+    return queueMutation("sent-jobs", async () => {
+      const entries = await repositories.sentJobs.read();
+      entries.push({ job, taskId, sentAt });
+      await repositories.sentJobs.write(entries);
+    });
+  }
+
+  async function getSentJobs(): Promise<
+    Array<{ job: JobCard; taskId: string; sentAt: string }>
+  > {
+    return repositories.sentJobs.read();
+  }
+
+  async function recordSentJobAndCleanup(
+    jobId: string,
+    taskId: string,
+    sentAt: string
+  ): Promise<void> {
+    const jobs = await repositories.jobs.read();
+    const job = jobs.find((j) => j.id === jobId);
+    if (job) {
+      const entries = await repositories.sentJobs.read();
+      entries.push({ job, taskId, sentAt });
+      await repositories.sentJobs.write(entries);
+    }
+    const filtered = jobs.filter((j) => j.id !== jobId);
+    if (filtered.length < jobs.length) {
+      await repositories.jobs.write(filtered);
+    }
   }
 
   async function getTasks(): Promise<GreetingTask[]> {
@@ -367,7 +712,32 @@ export function createDomainStore(
   }
 
   async function rejectTasks(taskIds: string[], failureReason = ""): Promise<GreetingTask[]> {
-    return mutateTasksAtomically(taskIds, "rejected", { failureReason });
+    return queueMutation("tasks", async () => {
+      const result = await mutateTasksAtomicallyInternal(taskIds, "rejected", { failureReason });
+
+      // 清理岗位：每个被拒绝的任务对应的岗位，如果该岗位没有其他活跃任务，就从岗位库删除
+      const allTasks = await repositories.tasks.read();
+      let allJobs = await repositories.jobs.read();
+      const rejectedJobIds = new Set(result.map((t) => t.jobId));
+
+      for (const jobId of rejectedJobIds) {
+        const hasOtherActive = allTasks.some(
+          (t) =>
+            t.jobId === jobId &&
+            !taskIds.includes(t.id) &&
+            (defaultNonTerminalTaskStatuses as readonly string[]).includes(t.status)
+        );
+        if (!hasOtherActive) {
+          const nextJobs = allJobs.filter((j) => j.id !== jobId);
+          if (nextJobs.length < allJobs.length) {
+            await repositories.jobs.write(nextJobs);
+            allJobs = nextJobs;
+          }
+        }
+      }
+
+      return result;
+    });
   }
 
   async function getApprovedTasks(): Promise<GreetingTask[]> {
@@ -553,6 +923,10 @@ export function createDomainStore(
         });
         tasks[taskIndex] = reconciled;
         await repositories.tasks.write(tasks);
+
+        // 写入发送历史 + 删除岗位（paused→sent 路径）
+        await recordSentJobAndCleanup(currentTask.jobId, currentTask.id, now);
+
         return reconciled;
       }
       if (currentTask.status !== "sending") {
@@ -576,6 +950,10 @@ export function createDomainStore(
 
       tasks[taskIndex] = sentTask;
       await repositories.tasks.write(tasks);
+
+      // 写入发送历史 + 删除岗位（sending→sent 路径）
+      await recordSentJobAndCleanup(currentTask.jobId, currentTask.id, now);
+
       return sentTask;
     });
   }
@@ -646,6 +1024,59 @@ export function createDomainStore(
     return repositories.runLogs.read();
   }
 
+  async function mutateTasksAtomically(
+    taskIds: string[],
+    to: GreetingTaskStatus,
+    metadata: Partial<Omit<GreetingTask, "id" | "createdAt" | "updatedAt" | "status">> = {}
+  ): Promise<GreetingTask[]> {
+    return queueMutation("tasks", () => mutateTasksAtomicallyInternal(taskIds, to, metadata));
+  }
+
+  async function mutateTasksAtomicallyInternal(
+    taskIds: string[],
+    to: GreetingTaskStatus,
+    metadata: Partial<Omit<GreetingTask, "id" | "createdAt" | "updatedAt" | "status">> = {}
+  ): Promise<GreetingTask[]> {
+    // mutateTasksAtomicallyInternal runs INSIDE an existing queueMutation("tasks") —
+    // do not wrap in another queueMutation here.
+    const tasks = await repositories.tasks.read();
+    const uniqueTaskIds = Array.from(new Set(taskIds));
+    const validated = uniqueTaskIds.map((taskId) => {
+      const index = tasks.findIndex((task) => task.id === taskId);
+      if (index < 0) {
+        throw new DomainEntityNotFoundError("task", taskId);
+      }
+
+      const current = tasks[index];
+      const allowed = taskTransitionMap[current.status];
+      if (!allowed.includes(to)) {
+        throw new DomainTransitionError(current.status, to);
+      }
+
+      const next = greetingTaskSchema.parse({
+        ...current,
+        ...metadata,
+        status: to,
+        updatedAt: new Date().toISOString()
+      });
+
+      return { index, current, next };
+    });
+
+    const changed = validated.filter(({ current, next }) => hasTaskChanged(current, next));
+    if (changed.length === 0) {
+      return validated.map(({ current }) => current);
+    }
+
+    const nextTasks = tasks.slice();
+    for (const { index, next } of changed) {
+      nextTasks[index] = next;
+    }
+
+    await repositories.tasks.write(nextTasks);
+    return validated.map(({ current, next }) => (hasTaskChanged(current, next) ? next : current));
+  }
+
   return {
     getConfig,
     saveConfig,
@@ -670,53 +1101,18 @@ export function createDomainStore(
     confirmTaskSent,
     refreshTaskSendReservation,
     appendRunLog,
-    getRunLogs
+    getRunLogs,
+    writeSentJob,
+    getSentJobs,
+    getPreferenceState,
+    recordJobFeedback,
+    removeJobs,
+    undoPreferenceFeedback,
+    savePreferenceRules,
+    restorePreferenceRuleVersion,
+    saveSuggestionBatch,
+    updateSuggestionBatch
   };
-
-  async function mutateTasksAtomically(
-    taskIds: string[],
-    to: GreetingTaskStatus,
-    metadata: Partial<Omit<GreetingTask, "id" | "createdAt" | "updatedAt" | "status">> = {}
-  ): Promise<GreetingTask[]> {
-    return queueMutation("tasks", async () => {
-      const tasks = await repositories.tasks.read();
-      const uniqueTaskIds = Array.from(new Set(taskIds));
-      const validated = uniqueTaskIds.map((taskId) => {
-        const index = tasks.findIndex((task) => task.id === taskId);
-        if (index < 0) {
-          throw new DomainEntityNotFoundError("task", taskId);
-        }
-
-        const current = tasks[index];
-        const allowed = taskTransitionMap[current.status];
-        if (!allowed.includes(to)) {
-          throw new DomainTransitionError(current.status, to);
-        }
-
-        const next = greetingTaskSchema.parse({
-          ...current,
-          ...metadata,
-          status: to,
-          updatedAt: new Date().toISOString()
-        });
-
-        return { index, current, next };
-      });
-
-      const changed = validated.filter(({ current, next }) => hasTaskChanged(current, next));
-      if (changed.length === 0) {
-        return validated.map(({ current }) => current);
-      }
-
-      const nextTasks = tasks.slice();
-      for (const { index, next } of changed) {
-        nextTasks[index] = next;
-      }
-
-      await repositories.tasks.write(nextTasks);
-      return validated.map(({ current, next }) => (hasTaskChanged(current, next) ? next : current));
-    });
-  }
 }
 
 export function getDomainStore(

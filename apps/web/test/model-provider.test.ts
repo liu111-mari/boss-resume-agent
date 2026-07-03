@@ -150,6 +150,36 @@ afterEach(() => {
 });
 
 describe("createDeepSeekGreetingModelProvider", () => {
+  it("includes confirmed soft job preferences in the existing score prompt", async () => {
+    let requestBody: Record<string, any> = {};
+    const provider = createDeepSeekGreetingModelProvider({
+      apiKey: "test-key",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-chat",
+      request: async (_url, init) => {
+        requestBody = JSON.parse(String(init.body));
+        return jsonResponse({
+          choices: [{ message: { content: JSON.stringify({
+            score: 80,
+            matchedRequirements: [],
+            missingRequirements: [],
+            reasons: [],
+            recommendedProfileFields: []
+          }) } }]
+        });
+      }
+    });
+
+    await provider.scoreJob({
+      job: createJob(),
+      profile: createProfile(),
+      keywords: [],
+      softPreferences: ["偏好能沉淀数据项目成果的岗位"]
+    });
+
+    expect(String(requestBody.messages[1].content)).toContain("偏好能沉淀数据项目成果的岗位");
+  });
+
   it("normalizes common DeepSeek JSON type drift", async () => {
     const provider = createDeepSeekGreetingModelProvider({
       apiKey: "test-key",

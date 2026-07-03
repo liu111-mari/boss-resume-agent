@@ -1,4 +1,5 @@
-import type { FilterConfig, JobCard } from "./index";
+import type { FilterConfig, JobCard, PreferenceRule } from "./index";
+import { evaluatePreferenceRules } from "./preferences";
 
 export type HardFilterResult = {
   accepted: boolean;
@@ -13,7 +14,11 @@ type SalaryRange = {
   unit: SalaryUnit;
 };
 
-export function evaluateJob(job: JobCard, config: FilterConfig): HardFilterResult {
+export function evaluateJob(
+  job: JobCard,
+  config: FilterConfig,
+  preferenceRules: PreferenceRule[] = []
+): HardFilterResult {
   const blockedCompany = findFirstMatch(job.company, config.blockedCompanies);
   if (blockedCompany) {
     return reject(`命中屏蔽公司：${blockedCompany}`);
@@ -87,10 +92,10 @@ export function evaluateJob(job: JobCard, config: FilterConfig): HardFilterResul
     }
   }
 
-  return {
-    accepted: true,
-    reasons: salaryReasons
-  };
+  const preferenceResult = evaluatePreferenceRules(job, preferenceRules);
+  if (!preferenceResult.accepted) return reject(preferenceResult.reasons[0] ?? "偏好规则未通过");
+
+  return { accepted: true, reasons: salaryReasons };
 }
 
 function reject(reason: string): HardFilterResult {

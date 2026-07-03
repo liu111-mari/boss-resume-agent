@@ -6,6 +6,7 @@ export type ScoreJobInput = {
   job: JobCard;
   profile: Profile;
   keywords: string[];
+  softPreferences?: string[];
 };
 
 export type ModelUsage = {
@@ -486,7 +487,8 @@ function buildScorePrompt(input: ScoreJobInput): string {
           title: input.job.title,
           company: input.job.company,
           jdText: input.job.jdText,
-          keywords: input.keywords
+          keywords: input.keywords,
+          confirmedSoftPreferences: input.softPreferences ?? []
         },
         profile: {
           school: input.profile.school,

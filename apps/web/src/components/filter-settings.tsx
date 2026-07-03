@@ -2,7 +2,7 @@ import React from "react";
 import type { FilterConfig } from "@boss-agent/shared";
 
 import { Panel, FieldHint } from "@/components/ui";
-import { runPipeline, saveConfig } from "@/lib/client-api";
+import { createTasksFromJobs, runPipeline, saveConfig } from "@/lib/client-api";
 import type { GreetingPipelineRunCounts } from "@/lib/greeting-pipeline";
 import { parseNullableNumberDraft, parseRequiredNumberDraft } from "@/lib/workbench-helpers";
 
@@ -35,6 +35,7 @@ export default function FilterSettings({
 }: FilterSettingsProps) {
   const [isSaving, setIsSaving] = React.useState(false);
   const [isRunning, setIsRunning] = React.useState(false);
+  const [isCreatingApproval, setIsCreatingApproval] = React.useState(false);
   const [minSalaryDraft, setMinSalaryDraft] = React.useState(formatNullableNumberDraft(config.minSalary));
   const [maxSalaryDraft, setMaxSalaryDraft] = React.useState(formatNullableNumberDraft(config.maxSalary));
   const [scoreThresholdDraft, setScoreThresholdDraft] = React.useState(String(config.scoreThreshold));
@@ -111,6 +112,27 @@ export default function FilterSettings({
     }
   }, [buildValidatedConfig, onError, onOperationalRefresh, onRunCompleted, onSaved, onStatus]);
 
+  const handleCreateApproval = React.useCallback(async () => {
+    const nextConfig = buildValidatedConfig();
+    if (!nextConfig) return;
+
+    setIsCreatingApproval(true);
+    try {
+      const savedConfig = await saveConfig(nextConfig);
+      onSaved(savedConfig.config);
+      const response = await createTasksFromJobs();
+      onStatus?.(
+        `已从岗位创建审批任务。处理 ${response.counts.processed}，待审批 ${response.counts.pendingReview}，硬筛拒绝 ${response.counts.hardRejected}，跳过 ${response.counts.skipped}，失败 ${response.counts.failed}`
+      );
+      onError?.("");
+      await onOperationalRefresh();
+    } catch (error) {
+      onError?.(getErrorMessage(error));
+    } finally {
+      setIsCreatingApproval(false);
+    }
+  }, [buildValidatedConfig, onError, onOperationalRefresh, onSaved, onStatus]);
+
   return (
     <Panel
       id="filter-settings"
@@ -118,10 +140,13 @@ export default function FilterSettings({
       description="编辑真实筛选条件并直接触发流水线，不在前端做本地假筛选。"
       actions={
         <div className="panel-actions-row">
-          <button className="button button-secondary" disabled={isSaving || isRunning} onClick={handleSave} type="button">
+          <button className="button button-secondary" disabled={isSaving || isRunning || isCreatingApproval} onClick={handleSave} type="button">
             保存设置
           </button>
-          <button className="button button-primary" disabled={isSaving || isRunning} onClick={handleRun} type="button">
+          <button className="button button-secondary" disabled={isSaving || isRunning || isCreatingApproval} onClick={handleCreateApproval} type="button">
+            {isCreatingApproval ? "正在创建审批…" : "直接创建审批（本地模板）"}
+          </button>
+          <button className="button button-primary" disabled={isSaving || isRunning || isCreatingApproval} onClick={handleRun} type="button">
             运行筛选与生成
           </button>
         </div>

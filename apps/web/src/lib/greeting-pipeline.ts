@@ -1,5 +1,6 @@
 import {
   evaluateJob,
+  evaluatePreferenceRules,
   renderGreeting,
   selectProfileItems,
   type FilterConfig,
@@ -7,6 +8,7 @@ import {
   type GreetingTaskStatus,
   type GreetingTemplate,
   type JobCard,
+  type PreferenceRule,
   type Profile
 } from "@boss-agent/shared";
 
@@ -44,6 +46,7 @@ type GreetingPipelineContext = {
   template: GreetingTemplate;
   jobsById: Map<string, JobCard>;
   tasks: GreetingTask[];
+  preferenceRules: PreferenceRule[];
   provider: GreetingModelProvider;
   store: DomainStoreLike;
   now: PipelineNow;
@@ -76,12 +79,13 @@ export function createGreetingPipeline(options: GreetingPipelineOptions) {
 
   return {
     async run(jobIds?: string[]): Promise<GreetingPipelineRunCounts> {
-      const [config, profile, template, jobs, tasks] = await Promise.all([
+      const [config, profile, template, jobs, tasks, preferenceState] = await Promise.all([
         options.store.getConfig(),
         options.store.getProfile(),
         options.store.getTemplate(),
         options.store.getJobs(),
-        options.store.getTasks()
+        options.store.getTasks(),
+        options.store.getPreferenceState()
       ]);
 
       const counts = createEmptyCounts();
@@ -91,6 +95,7 @@ export function createGreetingPipeline(options: GreetingPipelineOptions) {
         template,
         jobsById: new Map(jobs.map((job) => [job.id, job])),
         tasks,
+        preferenceRules: preferenceState.rules,
         provider: options.provider,
         store: options.store,
         now
@@ -207,7 +212,7 @@ async function processJob(
       detail: "collected"
     });
 
-    const hardFilter = evaluateJob(job, context.config);
+    const hardFilter = evaluateJob(job, context.config, context.preferenceRules);
     if (!hardFilter.accepted) {
       const failureReason = hardFilter.reasons[0] ?? "硬筛未通过";
       task = await context.store.transitionTask(task.id, "rejected", {
@@ -238,7 +243,8 @@ async function processJob(
       scoreResult = await context.provider.scoreJob({
         job,
         profile: context.profile,
-        keywords: context.config.requiredKeywords
+        keywords: context.config.requiredKeywords,
+        softPreferences: evaluatePreferenceRules(job, context.preferenceRules).softPreferences
       });
     } catch (error) {
       return failTask(context, task.id, job.id, error, counts, "评分阶段失败");

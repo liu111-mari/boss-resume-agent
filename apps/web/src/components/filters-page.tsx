@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import type { FilterConfig } from "@boss-agent/shared";
 
 import FilterSettings from "@/components/filter-settings";
+import PreferenceLearning from "@/components/preference-learning";
 import PageFeedback from "@/components/page-feedback";
 import { PageHeader } from "@/components/ui";
 import { loadFiltersPageData } from "@/lib/client-api";
@@ -66,6 +67,7 @@ export default function FiltersPage() {
         onSaved={setConfig}
         onStatus={setStatus}
       />
+      <PreferenceLearning />
     </>
   );
 }

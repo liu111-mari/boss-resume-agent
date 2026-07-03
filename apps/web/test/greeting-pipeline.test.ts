@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { GreetingTask, JobCard, Profile } from "@boss-agent/shared";
+import { createDefaultPreferenceRules, type GreetingTask, type JobCard, type Profile } from "@boss-agent/shared";
 import { createDomainStore, resetDomainStoreCache } from "@/lib/domain-store";
 import type {
   GreetingModelProvider,
@@ -328,7 +328,23 @@ function createPipelineStoreStub(jobs: JobCard[]): PipelineStore {
       logs.push(entry as Record<string, unknown>);
       return entry as never;
     }),
-    getRunLogs: vi.fn(async () => logs as never)
+    getRunLogs: vi.fn(async () => logs as never),
+    writeSentJob: vi.fn(async () => undefined),
+    getSentJobs: vi.fn(async () => []),
+    getPreferenceState: vi.fn(async () => ({
+      feedback: [],
+      rules: createDefaultPreferenceRules(FIXED_NOW),
+      ruleHistory: [],
+      suggestions: [],
+      newFeedbackCount: 0
+    })),
+    recordJobFeedback: vi.fn(async () => ({ feedback: [], removedJobIds: [], blockedJobIds: [], canceledTaskIds: [] })),
+    removeJobs: vi.fn(async () => ({ removedJobIds: [], blockedJobIds: [], canceledTaskIds: [] })),
+    undoPreferenceFeedback: vi.fn(async () => ({ feedback: null as never, restoredJob: null })),
+    savePreferenceRules: vi.fn(async (rules: unknown) => rules as never),
+    restorePreferenceRuleVersion: vi.fn(async () => null as never),
+    saveSuggestionBatch: vi.fn(async (batch: unknown) => batch as never),
+    updateSuggestionBatch: vi.fn(async () => null as never)
   } as PipelineStore;
 }
 
