@@ -2,6 +2,7 @@ const statusEl = document.getElementById("status");
 const approvedEl = document.getElementById("approvedCount");
 const quotaEl = document.getElementById("quota");
 const pausedEl = document.getElementById("pausedReason");
+const WORKBENCH_URL = "http://localhost:3000";
 
 document.getElementById("collectJobs").addEventListener("click", async () => {
   const collectionMessage = await sendToActiveTab({ type: "COLLECT_VISIBLE_JOBS" });
@@ -13,6 +14,23 @@ document.getElementById("runApproved").addEventListener("click", async () => {
   const executionMessage = response?.message || "已请求执行审批任务";
   await refreshStatus(executionMessage);
 });
+
+document.getElementById("openWorkbench").addEventListener("click", openWorkbenchWhenReady);
+
+async function openWorkbenchWhenReady() {
+  statusEl.textContent = "正在检查本地工作台…";
+  try {
+    const response = await fetch(WORKBENCH_URL, { cache: "no-store" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  } catch {
+    statusEl.textContent =
+      "本地工作台未启动。请先双击 start-workbench.bat，或在项目目录运行 npm run dev。";
+    return;
+  }
+
+  statusEl.textContent = "本地工作台已连接，正在打开…";
+  await chrome.tabs.create({ url: WORKBENCH_URL });
+}
 
 async function refreshStatus(preserveMessage = "") {
   statusEl.textContent = "正在检查本地工作台…";

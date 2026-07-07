@@ -79,6 +79,27 @@ test("popup injects the content scripts and retries when a BOSS tab has no recei
   assert.match(script, /Receiving end does not exist|Could not establish connection/);
 });
 
+test("popup checks local workbench before opening it", () => {
+  const html = fs.readFileSync(path.join(__dirname, "../src/popup.html"), "utf8");
+  const script = fs.readFileSync(path.join(__dirname, "../src/popup.js"), "utf8");
+
+  assert.match(html, /id="openWorkbench"/);
+  assert.doesNotMatch(html, /<a[^>]+href="http:\/\/localhost:3000"[^>]*>打开工作台<\/a>/);
+  assert.match(script, /const WORKBENCH_URL = "http:\/\/localhost:3000"/);
+  assert.match(script, /async function openWorkbenchWhenReady/);
+  assert.match(script, /fetch\(WORKBENCH_URL/);
+  assert.match(script, /chrome\.tabs\.create\(\{\s*url:\s*WORKBENCH_URL\s*\}\)/);
+  assert.match(script, /本地工作台未启动/);
+});
+
+test("repository includes a Windows one-click workbench launcher", () => {
+  const launcher = fs.readFileSync(path.join(__dirname, "../../../start-workbench.bat"), "utf8");
+
+  assert.match(launcher, /npm run dev/);
+  assert.match(launcher, /http:\/\/localhost:3000/);
+  assert.match(launcher, /pause/i);
+});
+
 test("workbench bridge accepts only same-window localhost requests and preserves request ids", () => {
   const bridge = fs.readFileSync(path.join(__dirname, "../src/workbench-bridge.js"), "utf8");
 
