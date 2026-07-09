@@ -21,6 +21,12 @@ export type ExtensionRunResult = {
   reason?: string;
 };
 
+export type JobEnrichmentResult = ExtensionRunResult & {
+  total: number;
+  completed: number;
+  failed: number;
+};
+
 export function checkExtensionBridge(options: BridgeCheckOptions = {}): Promise<boolean> {
   const target = getTarget(options.target);
   const timeoutMs = options.timeoutMs ?? 2_000;
@@ -82,6 +88,45 @@ export function runApprovedTasksViaExtension(options: BridgeOptions = {}): Promi
     const timeout = setTimeout(() => {
       cleanup();
       reject(new Error("扩展未连接，请在扩展页刷新后重试"));
+    }, Math.max(1, timeoutMs));
+  });
+}
+
+export function runJobEnrichmentViaExtension(
+  jobs: Array<{ id: string; detailUrl: string }>,
+  options: BridgeOptions = {}
+): Promise<JobEnrichmentResult> {
+  const target = getTarget(options.target);
+  const timeoutMs = options.timeoutMs ?? 15 * 60_000;
+  const requestId = createRequestId();
+
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeout);
+      target.removeEventListener("message", onMessage as EventListener);
+    };
+    const onMessage = (event: MessageEvent) => {
+      if (!isMatchingEvent(event, target, requestId, "ENRICH_JOB_DETAILS_RESULT")) return;
+      const response = isRecord(event.data.response) ? event.data.response : {};
+      cleanup();
+      resolve({
+        ok: response.ok === true,
+        message: typeof response.message === "string" ? response.message : "扩展未返回补全说明",
+        ...(typeof response.reason === "string" ? { reason: response.reason } : {}),
+        total: Number.isInteger(response.total) ? Number(response.total) : jobs.length,
+        completed: Number.isInteger(response.completed) ? Number(response.completed) : 0,
+        failed: Number.isInteger(response.failed) ? Number(response.failed) : 0
+      });
+    };
+
+    target.addEventListener("message", onMessage as EventListener);
+    target.postMessage(
+      { source: WEB_SOURCE, type: "ENRICH_JOB_DETAILS", requestId, jobs },
+      WORKBENCH_ORIGIN
+    );
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error("岗位详情补全等待超时，请查看 BOSS 页面和扩展状态"));
     }, Math.max(1, timeoutMs));
   });
 }

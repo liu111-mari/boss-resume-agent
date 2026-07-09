@@ -21,9 +21,11 @@ test("build emits Chrome-loadable JavaScript files instead of CJS content script
     "content.js"
   ]);
   assert.match(background, /import "\.\/task-runner\.js";/);
+  assert.match(background, /import "\.\/job-enrichment-runner\.js";/);
   assert.equal(fs.existsSync(path.join(dist, "job-extractor.js")), true);
   assert.equal(fs.existsSync(path.join(dist, "boss-page-adapter.js")), true);
   assert.equal(fs.existsSync(path.join(dist, "task-runner.js")), true);
+  assert.equal(fs.existsSync(path.join(dist, "job-enrichment-runner.js")), true);
   assert.equal(fs.existsSync(path.join(dist, "workbench-bridge.js")), true);
   assert.deepEqual(manifest.content_scripts[1], {
     matches: ["http://localhost:3000/*"],

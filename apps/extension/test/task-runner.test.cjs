@@ -113,6 +113,67 @@ test("waitForChatTarget tolerates a transient missing entry after the communicat
   assert.equal(attempts, 2);
 });
 
+test("waitForChatTarget advances a newly appeared already-sent dialog and waits for chat readiness", async () => {
+  let inspections = 0;
+  const advancedTabs = [];
+  const tabs = {
+    get: async () => ({ id: 7, url: "https://www.zhipin.com/job_detail/example.html" }),
+    query: async () => []
+  };
+
+  const result = await waitForChatTarget(
+    tabs,
+    7,
+    async () => {
+      inspections += 1;
+      return inspections === 1
+        ? { ok: true, state: "continue_required" }
+        : { ok: true, state: "ready" };
+    },
+    async () => {},
+    {
+      advanceTab: async (tabId) => {
+        advancedTabs.push(tabId);
+        return { ok: true, state: "opening_chat", interactionAttempted: true };
+      },
+      now: (() => { let time = 0; return () => (time += 100); })(),
+      timeoutMs: 1000,
+      pollMs: 100
+    }
+  );
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(advancedTabs, [7]);
+});
+
+test("waitForChatTarget stops with a specific error when an already-sent dialog cannot be advanced", async () => {
+  let time = 0;
+  let advances = 0;
+  const result = await waitForChatTarget(
+    {
+      get: async () => ({ id: 7, url: "https://www.zhipin.com/job_detail/example.html" }),
+      query: async () => []
+    },
+    7,
+    async () => ({ ok: true, state: "continue_required" }),
+    async (ms) => { time += ms; },
+    {
+      advanceTab: async () => {
+        advances += 1;
+        return { ok: true, state: "opening_chat", interactionAttempted: true };
+      },
+      maxAdvanceAttempts: 2,
+      now: () => time,
+      timeoutMs: 1000,
+      pollMs: 10
+    }
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "continue_dialog_stuck");
+  assert.equal(advances, 2);
+});
+
 test("waitForChatTarget returns a stage-specific timeout", async () => {
   let time = 0;
   const result = await waitForChatTarget(

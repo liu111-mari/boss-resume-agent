@@ -16,12 +16,20 @@ import type { DailyUsage, RunLogEntry } from "@/lib/domain-store";
 import type { GreetingPipelineRunCounts } from "@/lib/greeting-pipeline";
 
 export type CreateTasksFromJobsCounts = {
+  requested: number;
   processed: number;
   hardRejected: number;
   pendingReview: number;
   approved: number;
   skipped: number;
+  skippedActive: number;
+  notFound: number;
   failed: number;
+};
+
+export type CreateTasksFromJobsIssue = {
+  jobId: string;
+  reason: "active_task_exists" | "job_not_found" | "task_creation_failed";
 };
 
 export type WorkbenchRunSummary = {
@@ -90,6 +98,37 @@ export async function loadOverviewPageData(): Promise<WorkbenchOperationalData> 
 
 export async function loadJobsPageData(): Promise<JobCard[]> {
   return (await fetchJson<{ jobs: JobCard[] }>("/api/jobs")).jobs;
+}
+
+export async function fetchJobsWorkbook(jobIds?: string[]): Promise<{ blob: Blob; filename: string }> {
+  const response = await fetch("/api/jobs/export", jobIds?.length
+    ? {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jobIds })
+      }
+    : { method: "GET" });
+
+  if (!response.ok) {
+    const rawText = await response.text();
+    let payload: unknown = null;
+    try {
+      payload = JSON.parse(rawText);
+    } catch {
+      // Binary downloads can fail with an HTML proxy response.
+    }
+    throw new Error(buildApiErrorMessage(payload, response.status));
+  }
+
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")) {
+    throw new Error("岗位表导出失败：服务未返回 XLSX 文件");
+  }
+
+  return {
+    blob: await response.blob(),
+    filename: parseDownloadFilename(response.headers.get("content-disposition"))
+  };
 }
 
 export async function loadFiltersPageData(): Promise<FilterConfig> {
@@ -252,7 +291,10 @@ export async function runPipeline(jobIds?: string[]) {
 }
 
 export async function createTasksFromJobs(jobIds?: string[]) {
-  return fetchJson<{ counts: CreateTasksFromJobsCounts }>("/api/tasks/create-from-jobs", {
+  return fetchJson<{
+    counts: CreateTasksFromJobsCounts;
+    issues: CreateTasksFromJobsIssue[];
+  }>("/api/tasks/create-from-jobs", {
     method: "POST",
     headers: {
       "content-type": "application/json"
@@ -364,4 +406,16 @@ function buildApiErrorMessage(payload: unknown, status: number): string {
   }
 
   return `请求失败（HTTP ${status}）`;
+}
+
+function parseDownloadFilename(contentDisposition: string | null): string {
+  const utf8 = contentDisposition?.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+  if (utf8) {
+    try {
+      return decodeURIComponent(utf8);
+    } catch {
+      // Fall through to the ASCII filename.
+    }
+  }
+  return contentDisposition?.match(/filename="?([^";]+)"?/i)?.[1] ?? "岗位库.xlsx";
 }

@@ -1,4 +1,5 @@
 import "./task-runner.cjs";
+import "./job-enrichment-runner.cjs";
 
 const API_BASE = "http://localhost:3000";
 
@@ -32,9 +33,32 @@ const runner = globalThis.GreetingTaskRunner.createTaskRunner({
   },
   pacingMs: 2_500
 });
+const enrichmentRunner = globalThis.JobEnrichmentRunner.createJobEnrichmentRunner({
+  createTab: (url) => chrome.tabs.create({ url, active: true }),
+  waitForTab: (tabId) =>
+    globalThis.GreetingTaskRunner.waitForTabComplete(chrome.tabs, tabId, 15_000),
+  collectTab: (tabId) => sendToBossTab(tabId, { type: "COLLECT_VISIBLE_JOBS" }),
+  closeTab: (tabId) => chrome.tabs.remove(tabId),
+  delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  settleMs: 1_200,
+  pacingMs: 2_500
+});
 let activeRun = null;
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "ENRICH_JOB_DETAILS") {
+    enrichmentRunner.runJobs(message.jobs).then(sendResponse).catch((error) => {
+      sendResponse({
+        ok: false,
+        reason: "failed",
+        total: 0,
+        completed: 0,
+        failed: 0,
+        message: error instanceof Error ? error.message : "岗位详情补全失败"
+      });
+    });
+    return true;
+  }
   if (message.type === "RUN_APPROVED_TASKS") {
     if (activeRun) {
       sendResponse({ ok: false, reason: "already_running", message: "任务正在执行中" });

@@ -7,13 +7,18 @@ import type { FilterConfig, JobCard, PreferenceFocusField } from "@boss-agent/sh
 import JobQuickView from "@/components/job-quick-view";
 import PageFeedback from "@/components/page-feedback";
 import { EmptyState, PageHeader, Panel } from "@/components/ui";
+import { checkExtensionBridge, runJobEnrichmentViaExtension } from "@/lib/extension-bridge";
 import {
+  createTasksFromJobs,
+  fetchJobsWorkbook,
   loadJobsPageData,
   loadFiltersPageData,
   submitJobFeedback,
   undoJobFeedback,
+  type CreateTasksFromJobsCounts,
   type JobFeedbackAction
 } from "@/lib/client-api";
+import { getJobExportStats } from "@/lib/job-export";
 
 export default function JobsPage({ initialJobs }: { initialJobs?: JobCard[] }) {
   const [jobs, setJobs] = useState(initialJobs ?? []);
@@ -52,13 +57,16 @@ export default function JobsPage({ initialJobs }: { initialJobs?: JobCard[] }) {
   }, []);
 
   const visibleJobs = useMemo(() => filterJobs(jobs, query), [jobs, query]);
+  const selectedJobIdSet = useMemo(() => new Set(selectedJobIds), [selectedJobIds]);
+  const allJobsSelected = jobs.length > 0 && jobs.every((job) => selectedJobIdSet.has(job.id));
+  const exportStats = useMemo(() => getJobExportStats(jobs), [jobs]);
 
   async function runAction(jobIds: string[], action: JobFeedbackAction) {
     if (jobIds.length === 0 || busy) return;
     if (
       action !== "favorite" &&
       typeof window !== "undefined" &&
-      !window.confirm(action === "negative_remove" ? "确认将岗位标记为不喜欢并移除？" : "确认移除岗位且不用于AI学习？")
+      !window.confirm(getJobActionConfirmation(action, jobIds.length))
     ) return;
 
     setBusy(true);
@@ -99,6 +107,91 @@ export default function JobsPage({ initialJobs }: { initialJobs?: JobCard[] }) {
     }
   }
 
+  async function handleCreateApproval() {
+    if (selectedJobIds.length === 0 || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const response = await createTasksFromJobs(selectedJobIds);
+      setStatus(formatManualApprovalResult(response.counts));
+      if (response.counts.pendingReview > 0) {
+        setSelectedJobIds([]);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "加入审批队列失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleExport(jobIds?: string[]) {
+    if (busy) return;
+    const exportJobs = jobIds?.length
+      ? jobs.filter((job) => jobIds.includes(job.id))
+      : jobs;
+    const stats = getJobExportStats(exportJobs);
+    if (
+      stats.missingJd > 0 &&
+      typeof window !== "undefined" &&
+      !window.confirm(
+        `将导出 ${stats.total} 个岗位，其中完整 JD ${stats.completeJd} 个、缺失 ${stats.missingJd} 个。是否继续导出当前数据？`
+      )
+    ) return;
+
+    setBusy(true);
+    setError("");
+    try {
+      const { blob, filename } = await fetchJobsWorkbook(jobIds);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = filename;
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+      setStatus(`已导出 ${stats.total} 个岗位，其中完整 JD ${stats.completeJd} 个。`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "岗位表导出失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleEnrichment() {
+    if (busy) return;
+    const incompleteJobs = jobs
+      .filter((job) => getJobExportStats([job]).missingJd > 0 && job.detailUrl)
+      .map((job) => ({ id: job.id, detailUrl: job.detailUrl }));
+    if (incompleteJobs.length === 0) {
+      setStatus("当前岗位已经包含完整 JD，或缺失岗位没有可用详情链接。");
+      return;
+    }
+    if (
+      typeof window !== "undefined" &&
+      !window.confirm(
+        `将依次打开 ${incompleteJobs.length} 个 BOSS 详情页补全信息。遇到登录、验证码或安全提示会立即暂停。是否继续？`
+      )
+    ) return;
+
+    setBusy(true);
+    setError("");
+    setStatus(`正在补全 ${incompleteJobs.length} 个岗位，请保持 BOSS 登录并不要关闭浏览器。`);
+    try {
+      await checkExtensionBridge({ timeoutMs: 3_000 });
+      const result = await runJobEnrichmentViaExtension(incompleteJobs);
+      setJobs(await loadJobsPageData());
+      if (!result.ok) {
+        setError(result.message);
+      } else {
+        setStatus(result.message);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "岗位详情补全失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <>
       <PageHeader description="快速查看薪资和 JD；打开 BOSS 详情页后，插件会自动回填完整 JD。" title="岗位库" />
@@ -119,6 +212,14 @@ export default function JobsPage({ initialJobs }: { initialJobs?: JobCard[] }) {
                 value={query}
               />
             </label>
+            <div className="preference-toolbar">
+              <strong>完整 JD：{exportStats.completeJd} / {exportStats.total}（缺失 {exportStats.missingJd}）</strong>
+              <div className="panel-actions-row">
+                <button className="button button-primary" disabled={busy || jobs.length === 0} onClick={() => void handleExport()} type="button">导出全部岗位</button>
+                <button className="button button-secondary" disabled={busy || selectedJobIds.length === 0} onClick={() => void handleExport(selectedJobIds)} type="button">导出选中岗位</button>
+                <button className="button button-secondary" disabled={busy || exportStats.missingJd === 0} onClick={() => void handleEnrichment()} type="button">补全缺失详情</button>
+              </div>
+            </div>
             <div className="preference-toolbar">
               <strong>批量处理选中岗位（{selectedJobIds.length}）</strong>
               <div className="preference-focus-fields" aria-label="反馈重点">
@@ -148,6 +249,10 @@ export default function JobsPage({ initialJobs }: { initialJobs?: JobCard[] }) {
                 />
               </label>
               <div className="panel-actions-row">
+                <button className="button button-secondary" disabled={busy || jobs.length === 0} onClick={() => setSelectedJobIds((current) => toggleAllJobIds(jobs, current))} type="button">
+                  {allJobsSelected ? "取消全选" : "全选全部岗位"}
+                </button>
+                <button className="button button-primary" disabled={busy || selectedJobIds.length === 0} onClick={() => void handleCreateApproval()} type="button">加入审批队列</button>
                 <button className="button button-secondary" disabled={busy || selectedJobIds.length === 0} onClick={() => void runAction(selectedJobIds, "favorite")} type="button">重点关注</button>
                 <button className="button button-danger" disabled={busy || selectedJobIds.length === 0} onClick={() => void runAction(selectedJobIds, "negative_remove")} type="button">不喜欢并移除</button>
                 <button className="button button-danger-ghost" disabled={busy || selectedJobIds.length === 0} onClick={() => void runAction(selectedJobIds, "remove")} type="button">普通移除</button>
@@ -197,6 +302,26 @@ export function filterJobs(jobs: JobCard[], query: string): JobCard[] {
   return jobs.filter((job) =>
     [job.title, job.company, job.city].join(" ").toLocaleLowerCase("zh-CN").includes(keyword)
   );
+}
+
+export function toggleAllJobIds(jobs: JobCard[], selectedJobIds: string[]): string[] {
+  const selectedJobIdSet = new Set(selectedJobIds);
+  const allSelected = jobs.length > 0 && jobs.every((job) => selectedJobIdSet.has(job.id));
+  return allSelected ? [] : jobs.map((job) => job.id);
+}
+
+export function formatManualApprovalResult(counts: CreateTasksFromJobsCounts): string {
+  const issues: string[] = [];
+  if (counts.skippedActive > 0) issues.push(`${counts.skippedActive} 个已有活动任务`);
+  if (counts.notFound > 0) issues.push(`${counts.notFound} 个岗位不存在`);
+  if (counts.failed > 0) issues.push(`${counts.failed} 个创建失败`);
+  return `已加入待审批 ${counts.pendingReview} 个${issues.length ? `；${issues.join("，")}` : ""}。`;
+}
+
+export function getJobActionConfirmation(action: JobFeedbackAction, count: number): string {
+  return action === "negative_remove"
+    ? `确认将选中的 ${count} 个岗位标记为不喜欢并移除？这些岗位将用于AI学习。`
+    : `确认普通移除选中的 ${count} 个岗位？此操作不用于AI学习。`;
 }
 
 function formatDateTime(value: string) {

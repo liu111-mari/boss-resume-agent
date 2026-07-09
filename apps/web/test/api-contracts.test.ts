@@ -656,4 +656,90 @@ describe("persistent greeting automation API contracts", () => {
     });
     await expect(store.getTasks()).resolves.toEqual([]);
   });
+
+  it("lets explicitly selected jobs enter pending review even when automatic filters reject them", async () => {
+    const route = await import("@/app/api/tasks/create-from-jobs/route");
+    const store = await makeStore();
+    await store.saveConfig({
+      filteringEnabled: true,
+      targetTitles: ["数据分析师"]
+    });
+    await store.upsertJobs([
+      createJob({
+        id: "job-manually-selected",
+        title: "产品运营"
+      })
+    ]);
+    await store.createOrUpdateTask(
+      createTask({
+        id: "terminal-history",
+        jobId: "job-manually-selected",
+        status: "rejected"
+      })
+    );
+
+    const response = await route.POST(
+      jsonRequest("/api/tasks/create-from-jobs", "POST", {
+        jobIds: ["job-manually-selected"]
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      counts: {
+        requested: 1,
+        pendingReview: 1,
+        hardRejected: 0,
+        skippedActive: 0,
+        notFound: 0,
+        failed: 0
+      }
+    });
+    await expect(store.getTasks()).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          jobId: "job-manually-selected",
+          status: "pending_review"
+        }),
+        expect.objectContaining({
+          id: "terminal-history",
+          status: "rejected"
+        })
+      ])
+    );
+  });
+
+  it("reports active and missing selected jobs instead of silently doing nothing", async () => {
+    const route = await import("@/app/api/tasks/create-from-jobs/route");
+    const store = await makeStore();
+    await store.upsertJobs([createJob({ id: "job-active" })]);
+    await store.createOrUpdateTask(
+      createTask({
+        id: "active-task",
+        jobId: "job-active",
+        status: "pending_review"
+      })
+    );
+
+    const response = await route.POST(
+      jsonRequest("/api/tasks/create-from-jobs", "POST", {
+        jobIds: ["job-active", "job-missing"]
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      counts: {
+        requested: 2,
+        pendingReview: 0,
+        skippedActive: 1,
+        notFound: 1,
+        failed: 0
+      },
+      issues: [
+        { jobId: "job-active", reason: "active_task_exists" },
+        { jobId: "job-missing", reason: "job_not_found" }
+      ]
+    });
+  });
 });

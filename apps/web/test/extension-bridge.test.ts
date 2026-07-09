@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   checkExtensionBridge,
+  runJobEnrichmentViaExtension,
   runApprovedTasksViaExtension
 } from "@/lib/extension-bridge";
 
@@ -71,6 +72,37 @@ describe("extension bridge", () => {
 
     await expect(pending).resolves.toEqual({ ok: true, message: "任务已开始执行" });
     expect(target.listeners.size).toBe(0);
+  });
+
+  it("forwards job detail enrichment and returns completion counts", async () => {
+    const target = new FakeBridgeWindow();
+    const jobs = [{ id: "job-1", detailUrl: "https://www.zhipin.com/job_detail/job-1.html" }];
+    const pending = runJobEnrichmentViaExtension(jobs, {
+      target: target as unknown as Window,
+      timeoutMs: 50
+    });
+    const request = target.messages[0]?.data as {
+      type: string;
+      requestId: string;
+      jobs: typeof jobs;
+    };
+
+    expect(request).toMatchObject({ type: "ENRICH_JOB_DETAILS", jobs });
+    target.emit({
+      source: "boss-agent-extension",
+      type: "ENRICH_JOB_DETAILS_RESULT",
+      requestId: request.requestId,
+      response: {
+        ok: true,
+        reason: "completed",
+        total: 1,
+        completed: 1,
+        failed: 0,
+        message: "岗位详情补全完成"
+      }
+    });
+
+    await expect(pending).resolves.toMatchObject({ ok: true, completed: 1, failed: 0 });
   });
 
   it("rejects wrong origins and cleans up after timeout", async () => {

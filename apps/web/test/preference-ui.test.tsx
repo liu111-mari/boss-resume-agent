@@ -7,7 +7,12 @@ import {
   preferenceSuggestionBatchSchema,
   type JobCard
 } from "@boss-agent/shared";
-import JobsPage from "@/components/jobs-page";
+import {
+  formatManualApprovalResult,
+  getJobActionConfirmation,
+  toggleAllJobIds,
+  default as JobsPage
+} from "@/components/jobs-page";
 import PreferenceLearning from "@/components/preference-learning";
 
 const job: JobCard = {
@@ -41,10 +46,43 @@ describe("job preference UI", () => {
     expect(html).toContain("反馈重点");
     expect(html).toContain("补充说明");
     expect(html).toContain("批量处理选中岗位");
+    expect(html).toContain("全选全部岗位");
+    expect(html).toContain("加入审批队列");
+    expect(html).toContain("完整 JD：1 / 1");
+    expect(html).toContain("导出全部岗位");
+    expect(html).toContain("导出选中岗位");
+    expect(html).toContain("补全缺失详情");
     expect(html).toContain("使用 SQL 完成经营分析");
     expect(html).toContain("200-300元/天");
     expect(html).toContain("BOSS详情");
     expect(html).toContain('role="tooltip"');
+  });
+
+  it("selects every job in the library and toggles back to none", () => {
+    const anotherJob = { ...job, id: "job-2", title: "商业分析实习生" };
+
+    expect(toggleAllJobIds([job, anotherJob], [])).toEqual(["job-1", "job-2"]);
+    expect(toggleAllJobIds([job, anotherJob], ["job-1", "job-2"])).toEqual([]);
+  });
+
+  it("shows the selected count and AI-learning behavior before removal", () => {
+    expect(getJobActionConfirmation("remove", 89)).toBe(
+      "确认普通移除选中的 89 个岗位？此操作不用于AI学习。"
+    );
+  });
+
+  it("explains every manual approval outcome instead of reporting a silent no-op", () => {
+    expect(formatManualApprovalResult({
+      requested: 4,
+      processed: 2,
+      hardRejected: 0,
+      pendingReview: 2,
+      approved: 0,
+      skipped: 1,
+      skippedActive: 1,
+      notFound: 1,
+      failed: 0
+    })).toBe("已加入待审批 2 个；1 个已有活动任务，1 个岗位不存在。");
   });
 
   it("renders feedback readiness, editable rules, candidate correction, preview, and apply controls", () => {

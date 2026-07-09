@@ -277,6 +277,40 @@ test("prepareGreeting continues through the BOSS already-sent dialog", () => {
   assert.equal(continued, true);
 });
 
+test("inspectGreetingPage exposes an already-sent dialog as a recoverable continuation state", () => {
+  const dom = createDom(`
+    <main>
+      <button class="btn-startchat">继续沟通</button>
+      <section role="dialog" aria-modal="true">
+        <h3>已向 BOSS 发送消息</h3>
+        <p>您好，请问这个岗位还在招吗？</p>
+        <button>留在此页</button>
+        <button id="continue">继续沟通</button>
+      </section>
+    </main>
+  `);
+
+  const result = inspectGreetingPage(dom.window.document);
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state, "continue_required");
+});
+
+test("inspectGreetingPage reports a visible already-sent dialog with no usable continue button", () => {
+  const dom = createDom(`
+    <section role="dialog" aria-modal="true">
+      <h3>已向BOSS发送消息</h3>
+      <button>留在此页</button>
+      <button disabled>继续沟通</button>
+    </section>
+  `);
+
+  const result = inspectGreetingPage(dom.window.document);
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, "already_sent_continue_missing");
+});
+
 test("prepareGreeting marks a missing communication entry as a pre-click failure", () => {
   const dom = createDom("<main>岗位详情</main>");
 

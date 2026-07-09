@@ -217,10 +217,22 @@
       const candidates = Array.from(surface.querySelectorAll(SELECTORS.actionable)).filter((element) => {
         return isVisible(element, { interactive: true }) && isEnabled(element) && actionableLabel(element) === "继续沟通";
       });
-      return finderResult(candidates, { labels: ["继续沟通"], priority: "already_sent_dialog" });
+      return finderResult(candidates, {
+        labels: ["继续沟通"],
+        priority: "already_sent_dialog",
+        dialogFound: true
+      });
     }
 
-    return { ok: false, reason: "missing", details: { labels: ["继续沟通"], priority: "already_sent_dialog" } };
+    return {
+      ok: false,
+      reason: "missing",
+      details: {
+        labels: ["继续沟通"],
+        priority: "already_sent_dialog",
+        dialogFound: false
+      }
+    };
   }
 
   function isSearchEditor(element) {
@@ -429,6 +441,17 @@
     if (editorResult.ok) return { ok: true, state: "ready" };
     if (editorResult.reason !== "missing") {
       return pausedFailure(editorResult.reason, { stage: "chat_editor", ...editorResult.details });
+    }
+
+    const alreadySentContinue = findAlreadySentDialogContinue(document);
+    if (alreadySentContinue.ok) {
+      return { ok: true, state: "continue_required" };
+    }
+    if (alreadySentContinue.details?.dialogFound) {
+      return pausedFailure(alreadySentContinue.reason, {
+        stage: "already_sent_continue",
+        ...alreadySentContinue.details
+      });
     }
 
     const entryResult = findCommunicationEntry(document);
