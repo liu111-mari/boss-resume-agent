@@ -188,6 +188,9 @@
   }
 
   function findCommunicationEntry(document) {
+    const alreadySentContinue = findAlreadySentDialogContinue(document);
+    if (alreadySentContinue.ok) return alreadySentContinue;
+
     const candidates = Array.from(document.querySelectorAll(SELECTORS.actionable)).filter((element) => {
       return (
         isVisible(element, { interactive: true }) &&
@@ -200,6 +203,24 @@
       labels: Array.from(COMMUNICATION_LABELS),
       priority: preferred.length ? "boss_start_chat" : "page"
     });
+  }
+
+  function findAlreadySentDialogContinue(document) {
+    const root = document.body || document.documentElement;
+    if (!root) return { ok: false, reason: "missing", details: { labels: ["继续沟通"] } };
+
+    for (const surface of root.querySelectorAll(RISK_SURFACE_SELECTORS)) {
+      if (!isVisible(surface)) continue;
+      const compactText = normalizeLabel(visibleText(surface));
+      if (!compactText.includes("已向BOSS发送消息")) continue;
+
+      const candidates = Array.from(surface.querySelectorAll(SELECTORS.actionable)).filter((element) => {
+        return isVisible(element, { interactive: true }) && isEnabled(element) && actionableLabel(element) === "继续沟通";
+      });
+      return finderResult(candidates, { labels: ["继续沟通"], priority: "already_sent_dialog" });
+    }
+
+    return { ok: false, reason: "missing", details: { labels: ["继续沟通"], priority: "already_sent_dialog" } };
   }
 
   function isSearchEditor(element) {

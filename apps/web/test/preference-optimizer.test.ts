@@ -67,6 +67,8 @@ describe("preference optimizer", () => {
     expect(prompt).toContain("电话邀约客户到店");
     expect(prompt).toContain("negative");
     expect(prompt).toContain("不要排除所有运营");
+    expect(prompt).toContain("只有负反馈");
+    expect(prompt).toContain("至少输出1条候选规则");
   });
 
   it("parses fenced structured candidates and returns model metadata", async () => {
@@ -123,6 +125,25 @@ describe("preference optimizer", () => {
       correction: "",
       previousCandidates: []
     })).rejects.toThrow("unknown feedback");
+  });
+
+  it("rejects empty candidate responses instead of silently saving an empty draft", async () => {
+    const optimizer = createDeepSeekPreferenceOptimizer({
+      apiKey: "test-key",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-chat",
+      request: async () => ({
+        choices: [{ message: { content: JSON.stringify({ candidates: [] }) } }]
+      })
+    });
+
+    await expect(optimizer.analyze({
+      feedback: [feedback],
+      currentRules: [],
+      profile,
+      correction: "",
+      previousCandidates: []
+    })).rejects.toThrow("AI 没有生成候选规则");
   });
 
   it("fails clearly when no DeepSeek provider is configured", async () => {

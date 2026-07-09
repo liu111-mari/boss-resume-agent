@@ -40,6 +40,23 @@ describe("client api helpers", () => {
     await expect(fetchJson("/api/html-error")).rejects.not.toThrow(/<html>/i);
   });
 
+  it("explains how to recover when a local API route returns an HTML 404", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("<html><body>not found</body></html>", {
+            status: 404,
+            headers: { "content-type": "text/html" }
+          })
+      )
+    );
+
+    await expect(fetchJson("/api/jobs")).rejects.toThrow(
+      "本地服务路由不存在，请关闭并重新运行 start-workbench.bat"
+    );
+  });
+
   it("prefers parsed error payloads for non-ok responses", async () => {
     vi.stubGlobal(
       "fetch",

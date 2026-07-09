@@ -227,7 +227,7 @@ export default function PreferenceLearning({
               {previewText[candidate.tempId] ? <p className="field-hint">{previewText[candidate.tempId]}</p> : null}
             </article>
           ))}
-          {!candidates.length ? <p className="empty-state">还没有待确认的AI建议。</p> : null}
+          {!candidates.length ? <p className="empty-state">还没有待确认的AI建议。点击生成后如果仍为空，请看上方错误提示，并在纠正意见里说明要保留/排除的岗位特征后重试。</p> : null}
         </div>
       </div>
     </Panel>

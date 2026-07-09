@@ -12,6 +12,7 @@ import { loadFiltersPageData } from "@/lib/client-api";
 import type { GreetingPipelineRunCounts } from "@/lib/greeting-pipeline";
 
 const EMPTY_CONFIG: FilterConfig = {
+  filteringEnabled: true,
   targetTitles: [],
   cities: [],
   salaryUnit: "day",

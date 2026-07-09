@@ -268,6 +268,36 @@ describe("persistent greeting automation API contracts", () => {
     });
   });
 
+  it("auto-approves ingested jobs when filtering is disabled", async () => {
+    const ingestRoute = await import("@/app/api/extension/ingest/route");
+    const store = await makeStore();
+    await store.saveConfig({ filteringEnabled: false });
+
+    const response = await ingestRoute.POST(
+      jsonRequest("/api/extension/ingest", "POST", {
+        jobs: [
+          createJob({
+            id: "job-ingest-direct-approved",
+            title: "任意岗位"
+          })
+        ]
+      })
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      acceptedCount: 1,
+      approvedTaskCount: 1
+    });
+    await expect(store.getTasks()).resolves.toEqual([
+      expect.objectContaining({
+        jobId: "job-ingest-direct-approved",
+        status: "approved"
+      })
+    ]);
+  });
+
   it("approves persisted tasks and reports quota basics", async () => {
     const tasksRoute = await import("@/app/api/tasks/route");
     const approveRoute = await import("@/app/api/tasks/approve/route");
@@ -558,5 +588,72 @@ describe("persistent greeting automation API contracts", () => {
         })
       ]
     });
+  });
+
+  it("creates approved tasks directly when filtering is disabled", async () => {
+    const route = await import("@/app/api/tasks/create-from-jobs/route");
+    const store = await makeStore();
+    await store.saveConfig({
+      filteringEnabled: false,
+      targetTitles: ["完全不匹配"],
+      cities: ["不存在城市"]
+    });
+    await store.upsertJobs([
+      createJob({
+        id: "job-direct-approved",
+        title: "外卖员",
+        city: "北京"
+      })
+    ]);
+
+    const response = await route.POST(jsonRequest("/api/tasks/create-from-jobs", "POST", {}));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      counts: {
+        processed: 1,
+        hardRejected: 0,
+        pendingReview: 0,
+        approved: 1,
+        skipped: 0,
+        failed: 0
+      }
+    });
+    await expect(store.getTasks()).resolves.toEqual([
+      expect.objectContaining({
+        jobId: "job-direct-approved",
+        status: "approved",
+        modelProvider: "local",
+        modelName: "template"
+      })
+    ]);
+  });
+
+  it("keeps hard filtering when filtering is enabled", async () => {
+    const route = await import("@/app/api/tasks/create-from-jobs/route");
+    const store = await makeStore();
+    await store.saveConfig({
+      filteringEnabled: true,
+      targetTitles: ["数据分析师"]
+    });
+    await store.upsertJobs([
+      createJob({
+        id: "job-hard-rejected",
+        title: "外卖员"
+      })
+    ]);
+
+    const response = await route.POST(jsonRequest("/api/tasks/create-from-jobs", "POST", {}));
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      counts: {
+        processed: 1,
+        hardRejected: 1,
+        pendingReview: 0,
+        approved: 0,
+        skipped: 0,
+        failed: 0
+      }
+    });
+    await expect(store.getTasks()).resolves.toEqual([]);
   });
 });

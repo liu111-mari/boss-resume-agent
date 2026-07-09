@@ -15,6 +15,7 @@ void legacyDraftStatus;
 describe("shared greeting automation domain schemas", () => {
   it("applies the complete filter configuration defaults", () => {
     expect(filterConfigSchema.parse({})).toEqual({
+      filteringEnabled: true,
       targetTitles: [],
       cities: [],
       salaryUnit: "day",
@@ -34,6 +35,7 @@ describe("shared greeting automation domain schemas", () => {
 
   it("parses the complete filter configuration", () => {
     const result = filterConfigSchema.parse({
+      filteringEnabled: false,
       targetTitles: ["数据分析师"],
       cities: ["上海"],
       salaryUnit: "month",
@@ -51,6 +53,7 @@ describe("shared greeting automation domain schemas", () => {
     });
 
     expect(result).toMatchObject({
+      filteringEnabled: false,
       targetTitles: ["数据分析师"],
       cities: ["上海"],
       salaryUnit: "month",

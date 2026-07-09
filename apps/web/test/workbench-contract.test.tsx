@@ -25,6 +25,7 @@ const globalCssSource = readFileSync(path.resolve(testDir, "../src/app/globals.c
 
 function createConfig(overrides: Partial<FilterConfig> = {}): FilterConfig {
   return {
+    filteringEnabled: true,
     targetTitles: ["数据分析师实习生"],
     cities: ["北京", "上海"],
     salaryUnit: "month",

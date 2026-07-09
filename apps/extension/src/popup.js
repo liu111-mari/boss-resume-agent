@@ -20,11 +20,11 @@ document.getElementById("openWorkbench").addEventListener("click", openWorkbench
 async function openWorkbenchWhenReady() {
   statusEl.textContent = "正在检查本地工作台…";
   try {
-    const response = await fetch(WORKBENCH_URL, { cache: "no-store" });
+    const response = await fetch(`${WORKBENCH_URL}/api/run-summary`, { cache: "no-store" });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
   } catch {
     statusEl.textContent =
-      "本地工作台未启动。请先双击 start-workbench.bat，或在项目目录运行 npm run dev。";
+      "本地工作台未启动或启动不完整。请关闭旧的工作台窗口，再双击 start-workbench.bat。";
     return;
   }
 

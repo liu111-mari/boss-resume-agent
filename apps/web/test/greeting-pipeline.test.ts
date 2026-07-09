@@ -169,6 +169,7 @@ function createPipelineStoreStub(jobs: JobCard[]): PipelineStore {
   const tasks: GreetingTask[] = [];
   const logs: Array<Record<string, unknown>> = [];
   const config = {
+    filteringEnabled: true,
     targetTitles: [],
     cities: [],
     salaryUnit: "day" as const,

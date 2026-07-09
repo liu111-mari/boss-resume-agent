@@ -87,7 +87,7 @@ test("popup checks local workbench before opening it", () => {
   assert.doesNotMatch(html, /<a[^>]+href="http:\/\/localhost:3000"[^>]*>打开工作台<\/a>/);
   assert.match(script, /const WORKBENCH_URL = "http:\/\/localhost:3000"/);
   assert.match(script, /async function openWorkbenchWhenReady/);
-  assert.match(script, /fetch\(WORKBENCH_URL/);
+  assert.match(script, /fetch\(`\$\{WORKBENCH_URL\}\/api\/run-summary`/);
   assert.match(script, /chrome\.tabs\.create\(\{\s*url:\s*WORKBENCH_URL\s*\}\)/);
   assert.match(script, /本地工作台未启动/);
 });

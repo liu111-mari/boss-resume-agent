@@ -103,6 +103,7 @@ export const preferenceSuggestionBatchSchema = z.object({
 
 export const filterConfigSchema = z
   .object({
+    filteringEnabled: z.boolean().default(true),
     targetTitles: z.array(z.string()).default([]),
     cities: z.array(z.string()).default([]),
     salaryUnit: z.enum(["day", "month"]).default("day"),

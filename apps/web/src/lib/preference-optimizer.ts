@@ -117,6 +117,9 @@ export function createDeepSeekPreferenceOptimizer(config: DeepSeekConfig): Prefe
         const parsed = candidateResponseSchema.parse(
           JSON.parse(stripCodeFence(payload.choices[0].message.content))
         );
+        if (parsed.candidates.length === 0) {
+          throw new Error("AI 没有生成候选规则。请补充纠正意见，或增加更多不喜欢/喜欢的岗位反馈后重试。");
+        }
         const knownFeedbackIds = new Set(input.feedback.map((item) => item.id));
         for (const candidate of parsed.candidates) {
           const unknownId = candidate.evidenceFeedbackIds.find((id) => !knownFeedbackIds.has(id));
@@ -163,6 +166,7 @@ export function buildPreferencePrompt(input: AnalyzeInput): string {
   return [
     "你是岗位偏好规则分析器。比较正负样本，只输出JSON，不要自动应用规则。",
     "重点分析岗位名称、行业和JD；单个样本不足时降低confidence并给出警告性理由。",
+    "即使只有负反馈，也必须从不喜欢样本中提取保守的exclude/prefer候选；除非输入完全无岗位信息，否则至少输出1条候选规则。",
     "为控制成本，本次最多分析30条反馈，每条JD最多3000字；不要凭空补全被截断的信息。",
     "输出格式：{\"candidates\":[{tempId,action,field,mode,values,statement,weight,evidenceFeedbackIds,rationale,confidence}]}。",
     "action只能是include/exclude/prefer；field只能是title/industry/jd/semantic_preference；mode只能是hard/soft。",

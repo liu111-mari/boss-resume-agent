@@ -42,6 +42,7 @@ export async function POST(request: Request) {
       processed: 0,
       hardRejected: 0,
       pendingReview: 0,
+      approved: 0,
       skipped: 0,
       failed: 0
     };
@@ -61,10 +62,13 @@ export async function POST(request: Request) {
       counts.processed += 1;
 
       try {
-        const hardFilter = evaluateJob(job, config, preferenceState.rules);
-        if (!hardFilter.accepted) {
-          counts.hardRejected += 1;
-          continue;
+        const status = config.filteringEnabled ? "pending_review" : "approved";
+        if (config.filteringEnabled) {
+          const hardFilter = evaluateJob(job, config, preferenceState.rules);
+          if (!hardFilter.accepted) {
+            counts.hardRejected += 1;
+            continue;
+          }
         }
 
         const now = new Date().toISOString();
@@ -75,7 +79,7 @@ export async function POST(request: Request) {
           company: job.company,
           detailUrl: job.detailUrl ?? "",
           messageDraft: "",
-          status: "pending_review",
+          status,
           score: undefined,
           matchReasons: [],
           matchedRequirements: [],
@@ -100,7 +104,8 @@ export async function POST(request: Request) {
           continue;
         }
 
-        counts.pendingReview += 1;
+        if (status === "approved") counts.approved += 1;
+        else counts.pendingReview += 1;
       } catch {
         counts.failed += 1;
       }

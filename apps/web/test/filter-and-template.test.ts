@@ -35,6 +35,7 @@ function createJob(overrides: Partial<JobCard> = {}): JobCard {
 
 function createFilterConfig(overrides: Partial<FilterConfig> = {}): FilterConfig {
   return {
+    filteringEnabled: true,
     targetTitles: [],
     cities: [],
     salaryUnit: "day",

@@ -122,7 +122,9 @@ export default function FilterSettings({
       onSaved(savedConfig.config);
       const response = await createTasksFromJobs();
       onStatus?.(
-        `已从岗位创建审批任务。处理 ${response.counts.processed}，待审批 ${response.counts.pendingReview}，硬筛拒绝 ${response.counts.hardRejected}，跳过 ${response.counts.skipped}，失败 ${response.counts.failed}`
+        config.filteringEnabled
+          ? `已从岗位创建审批任务。处理 ${response.counts.processed}，待审批 ${response.counts.pendingReview}，硬筛拒绝 ${response.counts.hardRejected}，跳过 ${response.counts.skipped}，失败 ${response.counts.failed}`
+          : `筛选已关闭，岗位已直接批准。处理 ${response.counts.processed}，已批准 ${response.counts.approved}，跳过 ${response.counts.skipped}，失败 ${response.counts.failed}`
       );
       onError?.("");
       await onOperationalRefresh();
@@ -131,13 +133,13 @@ export default function FilterSettings({
     } finally {
       setIsCreatingApproval(false);
     }
-  }, [buildValidatedConfig, onError, onOperationalRefresh, onSaved, onStatus]);
+  }, [buildValidatedConfig, config.filteringEnabled, onError, onOperationalRefresh, onSaved, onStatus]);
 
   return (
     <Panel
       id="filter-settings"
       title="筛选设置"
-      description="编辑真实筛选条件并直接触发流水线，不在前端做本地假筛选。"
+      description={config.filteringEnabled ? "筛选开启：岗位需通过筛选后进入审批。" : "筛选关闭：采集岗位会跳过硬筛，直接进入已批准列表。"}
       actions={
         <div className="panel-actions-row">
           <button className="button button-secondary" disabled={isSaving || isRunning || isCreatingApproval} onClick={handleSave} type="button">
@@ -153,6 +155,16 @@ export default function FilterSettings({
       }
     >
       <div className="form-grid">
+        <label className="checkbox-field">
+          <input
+            checked={config.filteringEnabled}
+            name="filteringEnabled"
+            onChange={(event) => onChange({ ...config, filteringEnabled: event.target.checked })}
+            type="checkbox"
+          />
+          启用筛选
+        </label>
+
         <label className="field">
           <span>目标职位</span>
           <textarea

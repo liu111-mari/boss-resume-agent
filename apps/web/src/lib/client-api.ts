@@ -19,6 +19,7 @@ export type CreateTasksFromJobsCounts = {
   processed: number;
   hardRejected: number;
   pendingReview: number;
+  approved: number;
   skipped: number;
   failed: number;
 };
@@ -328,6 +329,9 @@ export async function fetchJson<T>(input: RequestInfo | URL, init?: RequestInit)
   try {
     payload = JSON.parse(rawText) as T | ApiErrorPayload;
   } catch {
+    if (response.status === 404 && String(input).startsWith("/api/")) {
+      throw new Error("本地服务路由不存在，请关闭并重新运行 start-workbench.bat");
+    }
     throw new Error(`服务返回非 JSON 响应（HTTP ${response.status}）`);
   }
 

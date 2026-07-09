@@ -251,6 +251,32 @@ test("prepareGreeting responds before its scheduled communication click runs", (
   assert.equal(clicked, true);
 });
 
+test("prepareGreeting continues through the BOSS already-sent dialog", () => {
+  const dom = createDom(`
+    <main>
+      <button class="btn-startchat">继续沟通</button>
+      <section role="dialog" aria-modal="true">
+        <h3>已向BOSS发送消息</h3>
+        <p>您好，请问AI产品实习生还在招吗？</p>
+        <button id="stay">留在此页</button>
+        <button id="continue">继续沟通</button>
+      </section>
+    </main>
+  `);
+  let continued = false;
+  dom.window.document.querySelector("#continue").addEventListener("click", () => {
+    continued = true;
+  });
+
+  const result = prepareGreeting(dom.window.document, dom.window, {
+    schedule: (callback) => callback()
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.state, "opening_chat");
+  assert.equal(continued, true);
+});
+
 test("prepareGreeting marks a missing communication entry as a pre-click failure", () => {
   const dom = createDom("<main>岗位详情</main>");
 

@@ -27,7 +27,42 @@ export async function POST(request: Request) {
       })
       .strict()
       .parse(input);
-    const jobs = await getDomainStore().upsertJobs(body.jobs);
-    return NextResponse.json({ ok: true, jobs, acceptedCount: body.jobs.length });
+    const store = getDomainStore();
+    const jobs = await store.upsertJobs(body.jobs);
+    const config = await store.getConfig();
+    let approvedTaskCount = 0;
+    if (!config.filteringEnabled) {
+      for (const job of jobs) {
+        const now = new Date().toISOString();
+        const task = await store.createTaskIfNoActiveJobTask({
+          id: globalThis.crypto.randomUUID(),
+          jobId: job.id,
+          jobTitle: job.title,
+          company: job.company,
+          detailUrl: job.detailUrl ?? "",
+          messageDraft: "",
+          status: "approved",
+          score: undefined,
+          matchReasons: [],
+          matchedRequirements: [],
+          missingRequirements: [],
+          usedProfileItemIds: [],
+          modelProvider: "local",
+          modelName: "template",
+          scoringProvider: "",
+          scoringModel: "",
+          refinementProvider: "",
+          refinementModel: "",
+          refinementFallback: false,
+          templateVersion: 1,
+          estimatedCostCny: 0,
+          failureReason: "",
+          createdAt: now,
+          updatedAt: now
+        });
+        if (task) approvedTaskCount += 1;
+      }
+    }
+    return NextResponse.json({ ok: true, jobs, acceptedCount: body.jobs.length, approvedTaskCount });
   });
 }
