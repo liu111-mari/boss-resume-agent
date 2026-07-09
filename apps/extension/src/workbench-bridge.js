@@ -14,11 +14,15 @@ window.addEventListener("message", async (event) => {
     return;
   }
 
-  if (message.type !== "RUN_APPROVED_TASKS") return;
+  if (message.type !== "RUN_APPROVED_TASKS" && message.type !== "ENRICH_JOB_DETAILS") return;
 
   let response;
   try {
-    response = await chrome.runtime.sendMessage({ type: "RUN_APPROVED_TASKS" });
+    response = await chrome.runtime.sendMessage(
+      message.type === "ENRICH_JOB_DETAILS"
+        ? { type: "ENRICH_JOB_DETAILS", jobs: message.jobs }
+        : { type: "RUN_APPROVED_TASKS" }
+    );
   } catch (error) {
     response = {
       ok: false,
@@ -26,7 +30,13 @@ window.addEventListener("message", async (event) => {
     };
   }
 
-  postBridgeMessage("RUN_APPROVED_TASKS_RESULT", message.requestId, response);
+  postBridgeMessage(
+    message.type === "ENRICH_JOB_DETAILS"
+      ? "ENRICH_JOB_DETAILS_RESULT"
+      : "RUN_APPROVED_TASKS_RESULT",
+    message.requestId,
+    response
+  );
 });
 
 function postBridgeMessage(type, requestId, response) {

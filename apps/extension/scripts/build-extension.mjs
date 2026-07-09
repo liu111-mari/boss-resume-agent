@@ -10,7 +10,7 @@ await rm(dist, { recursive: true, force: true });
 await mkdir(dist, { recursive: true });
 await cp(join(appRoot, "src"), dist, { recursive: true });
 
-const cjsModules = ["job-extractor", "boss-page-adapter", "task-runner"];
+const cjsModules = ["job-extractor", "boss-page-adapter", "task-runner", "job-enrichment-runner"];
 for (const moduleName of cjsModules) {
   await rename(join(dist, `${moduleName}.cjs`), join(dist, `${moduleName}.js`));
 }
@@ -27,7 +27,9 @@ const backgroundPath = join(dist, "background.js");
 const background = await readFile(backgroundPath, "utf8");
 await writeFile(
   backgroundPath,
-  background.replace('import "./task-runner.cjs";', 'import "./task-runner.js";'),
+  background
+    .replace('import "./task-runner.cjs";', 'import "./task-runner.js";')
+    .replace('import "./job-enrichment-runner.cjs";', 'import "./job-enrichment-runner.js";'),
   "utf8"
 );
 

@@ -37,33 +37,48 @@ export async function POST(request: Request) {
       store.getPreferenceState()
     ]);
 
+    const isManualSelection = body.jobIds !== undefined;
     const requestedIds = body.jobIds ? unique(body.jobIds) : jobs.map((job) => job.id);
     const counts = {
+      requested: requestedIds.length,
       processed: 0,
       hardRejected: 0,
       pendingReview: 0,
       approved: 0,
       skipped: 0,
+      skippedActive: 0,
+      notFound: 0,
       failed: 0
     };
+    const issues: Array<{
+      jobId: string;
+      reason: "active_task_exists" | "job_not_found" | "task_creation_failed";
+    }> = [];
 
     for (const jobId of requestedIds) {
       const job = jobs.find((j) => j.id === jobId);
       if (!job) {
-        counts.failed += 1;
+        counts.notFound += 1;
+        issues.push({ jobId, reason: "job_not_found" });
         continue;
       }
 
       if (hasNonTerminalTask(tasks, job.id)) {
         counts.skipped += 1;
+        counts.skippedActive += 1;
+        issues.push({ jobId, reason: "active_task_exists" });
         continue;
       }
 
       counts.processed += 1;
 
       try {
-        const status = config.filteringEnabled ? "pending_review" : "approved";
-        if (config.filteringEnabled) {
+        const status = isManualSelection
+          ? "pending_review"
+          : config.filteringEnabled
+            ? "pending_review"
+            : "approved";
+        if (!isManualSelection && config.filteringEnabled) {
           const hardFilter = evaluateJob(job, config, preferenceState.rules);
           if (!hardFilter.accepted) {
             counts.hardRejected += 1;
@@ -101,6 +116,8 @@ export async function POST(request: Request) {
 
         if (!task) {
           counts.skipped += 1;
+          counts.skippedActive += 1;
+          issues.push({ jobId, reason: "active_task_exists" });
           continue;
         }
 
@@ -108,10 +125,11 @@ export async function POST(request: Request) {
         else counts.pendingReview += 1;
       } catch {
         counts.failed += 1;
+        issues.push({ jobId, reason: "task_creation_failed" });
       }
     }
 
-    return NextResponse.json({ counts });
+    return NextResponse.json({ counts, issues });
   });
 }
 

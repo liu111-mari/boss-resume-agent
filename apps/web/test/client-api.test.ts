@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  fetchJobsWorkbook,
   fetchJson,
   loadApprovalsPageData,
   loadFiltersPageData,
@@ -88,6 +89,31 @@ describe("client api helpers", () => {
       ok: true,
       count: 2
     });
+  });
+
+  it("downloads a selected-jobs workbook and reads its UTF-8 filename", async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(new Uint8Array([80, 75, 3, 4]), {
+        status: 200,
+        headers: {
+          "content-type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+          "content-disposition": "attachment; filename*=UTF-8''%E5%B2%97%E4%BD%8D%E5%BA%93.xlsx"
+        }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchJobsWorkbook(["job-1", "job-2"]);
+
+    expect(result.filename).toBe("岗位库.xlsx");
+    expect(result.blob.size).toBe(4);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/jobs/export",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({ jobIds: ["job-1", "job-2"] })
+      })
+    );
   });
 
   it("loads only the endpoints required by each page", async () => {

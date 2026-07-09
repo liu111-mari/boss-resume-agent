@@ -38,6 +38,9 @@
     const pollMs = options.pollMs ?? 250;
     const now = options.now || Date.now;
     const deadline = now() + timeoutMs;
+    const advanceTab = options.advanceTab;
+    const maxAdvanceAttempts = Math.max(1, options.maxAdvanceAttempts ?? 2);
+    const advanceAttemptsByTab = new Map();
 
     while (true) {
       const candidates = [];
@@ -55,6 +58,7 @@
       }
 
       const seen = new Set();
+      let advanced = false;
       for (const tab of candidates) {
         if (!tab || typeof tab.id !== "number" || seen.has(tab.id) || !isBossUrl(tab.url)) continue;
         seen.add(tab.id);
@@ -66,6 +70,48 @@
         }
         if (inspection?.ok && inspection.state === "ready") {
           return { ok: true, tab };
+        }
+        if (inspection?.ok && inspection.state === "continue_required") {
+          if (typeof advanceTab !== "function") {
+            return {
+              ok: false,
+              pause: true,
+              reason: "unavailable",
+              code: "continue_dialog_unavailable",
+              error: "检测到 BOSS 已发送提示，但页面恢复能力不可用",
+              tab
+            };
+          }
+          const attempts = advanceAttemptsByTab.get(tab.id) ?? 0;
+          if (attempts >= maxAdvanceAttempts) {
+            return {
+              ok: false,
+              pause: true,
+              reason: "stuck",
+              code: "continue_dialog_stuck",
+              error: "BOSS 已发送提示在有限重试后仍未关闭",
+              tab
+            };
+          }
+          let advancement;
+          try {
+            advancement = await advanceTab(tab.id);
+          } catch {
+            advancement = null;
+          }
+          advanceAttemptsByTab.set(tab.id, attempts + 1);
+          if (!advancement?.ok) {
+            return {
+              ok: false,
+              pause: true,
+              reason: advancement?.reason ?? "advance_failed",
+              code: advancement?.code ?? "continue_dialog_advance_failed",
+              error: advancement?.error ?? "无法点击 BOSS 弹窗中的继续沟通",
+              tab
+            };
+          }
+          advanced = true;
+          break;
         }
         if (
           inspection?.pause &&
@@ -88,6 +134,7 @@
         };
       }
       await delay(Math.min(pollMs, remaining));
+      if (advanced) continue;
     }
   }
 
@@ -165,7 +212,9 @@
             sourceTabId: tab.id
           };
         }
-        const target = await waitForChatTarget(tabs, tab.id, inspectTab, delay);
+        const target = await waitForChatTarget(tabs, tab.id, inspectTab, delay, {
+          advanceTab: (tabId) => sendMessage(tabId, { type: "PREPARE_GREETING", task })
+        });
         if (!target.ok) return { ...target, sourceTabId: tab.id, chatTabId: target.tab?.id };
         chatTab = target.tab;
       } else if (preparation.state !== "ready") {

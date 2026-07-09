@@ -113,12 +113,14 @@ test("workbench bridge accepts only same-window localhost requests and preserves
   assert.match(bridge, /BOSS_AGENT_BRIDGE_READY/);
 });
 
-test("workbench bridge forwards only approved-task execution to the background", () => {
+test("workbench bridge forwards approved-task execution and job enrichment to the background", () => {
   const bridge = fs.readFileSync(path.join(__dirname, "../src/workbench-bridge.js"), "utf8");
 
-  assert.match(bridge, /message\.type\s*!==\s*"RUN_APPROVED_TASKS"/);
-  assert.match(bridge, /chrome\.runtime\.sendMessage\(\{\s*type:\s*"RUN_APPROVED_TASKS"\s*\}\)/);
+  assert.match(bridge, /ENRICH_JOB_DETAILS/);
+  assert.match(bridge, /\{\s*type:\s*"RUN_APPROVED_TASKS"\s*\}/);
   assert.match(bridge, /RUN_APPROVED_TASKS_RESULT/);
+  assert.match(bridge, /ENRICH_JOB_DETAILS_RESULT/);
+  assert.match(bridge, /jobs:\s*message\.jobs/);
 });
 
 test("background acknowledges a batch immediately and rejects duplicate starts", () => {
